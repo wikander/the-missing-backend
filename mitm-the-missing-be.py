@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from mitmproxy import http
 import random
 import time
+from utils import set_by_path
 
 @dataclass
 class ResponseItem:
@@ -57,8 +58,14 @@ class MissingBe:
         pass
 
     def request(self, flow):
+        logging.info("Request")
         sleep = self.parseStringAsNumber(flow.request.query.get("sleep"))
         logging.info(f"sleep {sleep}")
+        
+        data = {}
+        set_by_path(data, "users[].name", "Alice")
+        logging.info(f"This is it: {data}")
+
         if sleep:
             logging.info("I'm sleeping")
             time.sleep(sleep / 1000)
@@ -72,7 +79,8 @@ class MissingBe:
 
         if flow.request.method == "GET" and response:
             flow.response = http.Response.make(response.statusCode, json.dumps(response.body), {"Content-Type": "application/json; charset=utf-8"})
-            return
-
+            
+    def response(self, flow):
+        logging.info("response")
 
 addons = [MissingBe()]
