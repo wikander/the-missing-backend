@@ -1,0 +1,7 @@
+{
+  "path": "/test",
+  "statusCode": 200,
+  "body": {
+    "test": 43
+  }
+}

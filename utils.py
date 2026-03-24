@@ -1,11 +1,25 @@
 # json_utils.py
+from __future__ import annotations
+
 import re
+from typing import Dict, List, Union, cast
 
 INDEXED_KEY = re.compile(r'^(?P<key>[a-zA-Z0-9_]+)(\[(?P<index>\d*)\])?$')
 
-def set_by_path(data, path, value, sep="."):
+# ---- JSON-typer ----
+JSONValue = Union[str, int, float, bool, None, "JSONDict", "JSONList"]
+JSONDict = Dict[str, JSONValue]
+JSONList = List[JSONValue]
+
+
+def set_by_path(
+    data: JSONDict,
+    path: str,
+    value: JSONValue,
+    sep: str = ".",
+) -> None:
     parts = path.split(sep)
-    cur = data
+    cur: JSONDict = data  # alltid en dict
 
     for part in parts[:-1]:
         match = INDEXED_KEY.match(part)
@@ -15,50 +29,48 @@ def set_by_path(data, path, value, sep="."):
         key = match.group("key")
         idx = match.group("index")
 
-        # ---- Ensure the key exists ----
-        if key not in cur:
-            # If next part is indexed -> create list
-            if idx is not None:
-                cur[key] = []
-            else:
-                cur[key] = {}
-
-        # ---- Move into key ----
         if idx is None:
-            # dict access
-            if not isinstance(cur[key], dict):
+            # ----- dict-access -----
+            existing = cur.get(key)
+            if not isinstance(existing, dict):
                 cur[key] = {}
-            cur = cur[key]
+            cur = cast(JSONDict, cur[key])
 
         else:
-            # list access
-            lst = cur[key]
-            if not isinstance(lst, list):
-                lst = cur[key] = []
+            # ----- list-access -----
+            existing = cur.get(key)
+            if not isinstance(existing, list):
+                cur[key] = []
+            lst = cast(JSONList, cur[key])
 
             if idx == "":
-                # append new dict automatically
-                lst.append({})
-                cur = lst[-1]
+                # append ny dict
+                elem: JSONDict = {}
+                lst.append(elem)
+                cur = elem
             else:
                 i = int(idx)
-                # grow list if needed
                 while len(lst) <= i:
                     lst.append({})
-                cur = lst[i]
+                cur = cast(JSONDict, lst[i])
 
-    # ---- Set final value ----
+    # ----- Sätt slutvärdet -----
     final = parts[-1]
     match = INDEXED_KEY.match(final)
+    if not match:
+        raise ValueError(f"Invalid path segment: {final}")
+
     key = match.group("key")
     idx = match.group("index")
 
     if idx is None:
         cur[key] = value
     else:
-        if key not in cur or not isinstance(cur[key], list):
+        existing = cur.get(key)
+        if not isinstance(existing, list):
             cur[key] = []
-        lst = cur[key]
+        lst = cast(JSONList, cur[key])
+
         if idx == "":
             lst.append(value)
         else:
