@@ -2,6 +2,6 @@
   "path": "/api/people/1",
   "statusCode": 200,
   "body": {
-    "test": 43
+    "test": 100
   }
 }

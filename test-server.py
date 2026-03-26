@@ -9,6 +9,7 @@ app = Flask(__name__)
 @app.get("/test")
 def get_test():
     logging.info("GET /test")
+    logging.info("HEADERS \n%s", request.headers)
     return jsonify({"message": "hello"}), 200
 
 
