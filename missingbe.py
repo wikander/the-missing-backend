@@ -6,8 +6,10 @@ from dataclasses import dataclass
 import random
 import time
 from mitmproxy import http
-from mitmproxy import types
 from mitmproxy import command
+from mitmproxy import ctx
+from mitmproxy import exceptions
+from mitmproxy.addonmanager import Loader
 from mitmproxy.http import HTTPFlow
 from pathlib import Path
 from typing import TypedDict, cast, NotRequired, Optional
@@ -71,8 +73,7 @@ class MissingBe:
     def getAbsolutePath(self, path_str: str):
         return str((Path.cwd() / Path(path_str)).resolve())
 
-    @command.command("missingbe.load")
-    def loadResponseFiles(self, path: types.Path):
+    def loadResponseFiles(self, path: str):
         absolutePath = self.getAbsolutePath(path)
 
         logging.info(f"Loading response files from {absolutePath}")
@@ -122,7 +123,28 @@ class MissingBe:
 
     def __init__(self):
         self.responses: defaultdict[str, list[ResponseItem]] = defaultdict(list)
-        self.loadResponseFiles(types.Path(os.getcwd()))
+
+    def load(self, loader: Loader):
+        loader.add_option(
+            name="mock_dir",
+            typespec=str,
+            default=".",
+            help="Directory to load response*.json mock files from, relative to the current directory.",
+        )
+
+    def configure(self, updated: set[str]):
+        if "mock_dir" in updated:
+            directory = ctx.options.mock_dir
+            if not os.path.isdir(self.getAbsolutePath(directory)):
+                raise exceptions.OptionsError(
+                    f"mock_dir: not a directory: {directory}"
+                )
+            self.loadResponseFiles(directory)
+
+    @command.command("missingbe.reload")
+    def reload(self) -> None:
+        """Re-read the mock files from mock_dir."""
+        self.loadResponseFiles(ctx.options.mock_dir)
 
     def request(self, flow: HTTPFlow):
         logging.info("Request")
