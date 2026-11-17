@@ -32,13 +32,32 @@ mitmproxy --mode reverse:http://localhost:3000 -s ./missingbe.py --ssl-insecure 
 
 ## Mock files
 
-Mocks are loaded from the `response*.json` files in the directory given by the `mock_dir` option (default: the directory you start mitmproxy in):
+Mocks are loaded from the `mitten-mock*.json` files in the directory given by the `mock_dir` option (default: the directory you start mitmproxy in):
 
 ```
 mitmproxy --mode reverse:http://localhost:3000 -s ./missingbe.py --set mock_dir=./example-responses -p 3001
 ```
 
 Changing the option while running (`:set mock_dir=./other-mocks`, or the options editor with `O`) loads that directory instead. After editing mock files, reload them with the command `:missingbe.reload`.
+
+A mock matches on `path` and optionally `method`. Its `request` part either answers the request directly (when it has a `statusCode`) or alters it before it goes to the server, and its `response` part alters the response:
+
+```json
+{
+  "path": "/api/people/:id",
+  "method": "GET",
+  "request": { "statusCode": 200, "body": { "name": "Luke" } },
+  "response": { "headers": { "X-Mocked": ["true"] } }
+}
+```
+
+The full reference is in [docs/mock-format.md](docs/mock-format.md). Add `?sleep=<ms>` to any request to delay it.
+
+## Project docs
+
+- [docs/mock-format.md](docs/mock-format.md): mock file reference
+- [docs/adr/](docs/adr/): architecture decisions and why they were made
+- [CHANGELOG.md](CHANGELOG.md): changes
 
 ## Create mocks
 
@@ -48,4 +67,4 @@ If you have a url you want to mock, you can get the started by fetching the data
 curl -s -w "\n===\nstatus:%{http_code}\nmethod:%{method}\npath:%{url.path}\n" -X GET https://swapi.info/api/vehicles/14
 ```
 
-the output can be piped to the util curl-2-mock to create a mock-bluprint.
+the output can be piped to the util curl-2-mock to create a mock-bluprint. Note: curl-2-mock still generates the old `response` format.

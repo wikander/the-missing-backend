@@ -1,0 +1,10 @@
+{
+  "path": "/test",
+  "method": "GET",
+  "request": {
+    "statusCode": 200,
+    "body": {
+      "test": ["43", "hejhej"]
+    }
+  }
+}

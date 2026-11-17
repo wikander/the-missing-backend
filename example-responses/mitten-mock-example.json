@@ -1,0 +1,30 @@
+{
+  "path": "/test",
+  "method": "GET",
+  "request": {
+    "statusCode": 200,
+    "headers": {
+      "Cache-Control": ["no-cache"],
+      "X-Request-Id": ["abc123"],
+      "Accept": ["application/json", "text/plain"],
+      "_x_Authorization": ["Bearer xyz"],
+      "X-Feature": ["on", "_x_off"]
+    },
+    "body": {
+      "test": ["43", "hejhej"]
+    }
+  },
+  "response": {
+    "statusCode": 200,
+    "headers": {
+      "Cache-Control": ["no-cache"],
+      "X-Request-Id": ["abc123"],
+      "Accept": ["application/json", "text/plain"],
+      "_x_Authorization": ["Bearer xyz"],
+      "X-Feature": ["on", "_x_off"]
+    },
+    "body": {
+      "test": ["43", "hejhej"]
+    }
+  }
+}
