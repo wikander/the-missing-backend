@@ -4,7 +4,7 @@ import json
 from collections import defaultdict
 from dataclasses import dataclass
 import random
-import time
+import asyncio
 from mitmproxy import http
 from mitmproxy import command
 from mitmproxy import ctx
@@ -146,9 +146,11 @@ class MissingBe:
         """Re-read the mock files from mock_dir."""
         self.loadResponseFiles(ctx.options.mock_dir)
 
-    def request(self, flow: HTTPFlow):
+    async def request(self, flow: HTTPFlow):
         logging.info("Request")
-        sleep = self.parseStringAsNumber(flow.request.query.get("sleep"))
+        # pop: the sleep param is for the proxy only, so remove it before the
+        # request can be forwarded to the real server.
+        sleep = self.parseStringAsNumber(flow.request.query.pop("sleep", None))
         logging.info(f"sleep {sleep}")
 
         data = {}
@@ -156,7 +158,9 @@ class MissingBe:
 
         if sleep:
             logging.info("I'm sleeping")
-            time.sleep(sleep / 1000)
+            # asyncio.sleep only pauses this flow; time.sleep would block
+            # mitmproxy's event loop and stall every other request too.
+            await asyncio.sleep(sleep / 1000)
 
         currentPathWithoutQuery = flow.request.path.split("?", 1)[0]
         logging.info(currentPathWithoutQuery)
