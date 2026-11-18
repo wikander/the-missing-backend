@@ -2,17 +2,20 @@
 
 If you should agree on something, agree on this.
 
-to run: `mitmproxy --mode reverse:https://avtal-uppfoljning-dev.apps.tocp4.arbetsformedlingen.se -s ./missingbe.py --ssl-insecure --set connection_strategy=lazy -p 9999`
+to run: `mitmproxy --mode reverse:http://localhost:3000 -s ./missingbe.py --set mock_dir=./example-responses --set connection_strategy=lazy -p 3001`
 
 ## Developing
 
-Create an virtual environment
+Dependencies are managed with [uv](https://docs.astral.sh/uv/) (`brew install uv`). `pyproject.toml` lists them and `uv.lock` pins the exact versions; mitmproxy is the only runtime dependency, and Flask (for the test server) and pytest are in the `dev` group.
 
 ```
-    python -m venv .venv
-    source .venv/bin/activate
-    python -m pip install -r requirements.txt
+uv sync            # create .venv with exactly the locked versions
+uv run pytest -q   # run the tests
 ```
+
+Add a dependency with `uv add <package>` (or `uv add --dev <package>`), which updates both files. Don't edit `uv.lock` by hand.
+
+The commands below use the mitmproxy on your `PATH`, for example from Homebrew. To use the project's own version instead, put `uv run` in front: `uv run mitmproxy ...`.
 
 ## Default behaviour
 
@@ -77,7 +80,7 @@ A browser only lets a page read a response from another origin (scheme, host and
 Use the test server
 
 ```
-    python test-server.py
+    uv run python test-server.py
 ```
 
 The test server then starts on localhost 3000. It answers GET/POST/PUT/PATCH/DELETE on two paths. `data` in the response is a dummy record for GET, the dummy with your JSON body merged in for PATCH, and your JSON body for POST and PUT:
@@ -122,7 +125,7 @@ The full reference is in [docs/mock-format.md](docs/mock-format.md). What happen
 
 - `missingbe.py`: the addon: its options and the request and response hooks.
 - `mitten/`: the building blocks, one module per topic (mock files, path patterns, delays, responses, CORS, status codes).
-- `tests/`: the tests, one file per topic. Run them with `python -m pytest -q`.
+- `tests/`: the tests, one file per topic. Run them with `uv run pytest -q`.
 
 mitmproxy reloads `missingbe.py` when you save it, but not the modules in `mitten/`. Restart mitmproxy after editing those.
 

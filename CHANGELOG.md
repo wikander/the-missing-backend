@@ -41,6 +41,9 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Dependencies are managed with uv: `pyproject.toml` and `uv.lock`, with
+  Flask and pytest in a `dev` group. `requirements.txt` is removed; use
+  `uv sync` and `uv run pytest -q`.
 - **Breaking:** `method` is required in mock files, as a string or an array
   of strings. `HEAD` is not allowed in it: HEAD requests use the `GET` mocks
   and get the GET response without the body

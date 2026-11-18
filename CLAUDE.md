@@ -29,12 +29,14 @@ real backend.
 ## Commands
 
 ```bash
-python -m pytest -q
+uv run pytest -q
 mitmdump -s ./missingbe.py --mode reverse:http://localhost:3000 --set mock_dir=./example-responses --set connection_strategy=lazy -p 3001
 ```
 
-The mitmproxy installed by Homebrew has its own Python; tests need a
-virtualenv with `requirements.txt` installed.
+Dependencies are managed with uv: `pyproject.toml` (runtime: mitmproxy;
+`dev` group: pytest, Flask) and `uv.lock`. Add them with `uv add` or
+`uv add --dev`, never by editing `uv.lock`. The mitmproxy installed by
+Homebrew has its own Python; `uv run mitmdump ...` uses the locked version.
 
 ## Conventions
 
