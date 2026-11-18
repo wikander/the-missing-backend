@@ -301,8 +301,9 @@ class MissingBe:
 
     def response(self, flow: HTTPFlow):
         mock = self.flow_mocks.get(flow)
-        if mock is None or mock.response is None or flow.response is None:
+        if mock is None or mock.response is None:
             return
+        assert flow.response is not None  # mitmproxy only calls this hook with a response
         apply_response_part(flow.response, mock.response)
 
 
