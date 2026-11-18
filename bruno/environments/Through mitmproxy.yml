@@ -1,0 +1,4 @@
+name: Through mitmproxy
+variables:
+  - name: baseUrl
+    value: http://localhost:3001

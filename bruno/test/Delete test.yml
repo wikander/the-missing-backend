@@ -1,0 +1,15 @@
+info:
+  name: Delete test
+  type: http
+  seq: 6
+http:
+  method: DELETE
+  url: "{{baseUrl}}/test"
+  auth: inherit
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+docs: |-
+  The test server answers 204 with an empty body.

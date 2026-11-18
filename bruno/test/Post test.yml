@@ -1,0 +1,25 @@
+info:
+  name: Post test
+  type: http
+  seq: 3
+http:
+  method: POST
+  url: "{{baseUrl}}/test"
+  body:
+    type: json
+    data: |-
+      {
+        "name": "created from Bruno"
+      }
+  auth: inherit
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+docs: |-
+  The test server answers 201 `{"message": "created", "data": <body>}`.
+
+  Through mitmproxy, `mitten-mock-test-server-post.json` replaces the body
+  with `{"altered": true}` and adds `X-Mocked-By` before forwarding, then
+  sets the status to 202 and adds `X-Mocked: true` on the response.

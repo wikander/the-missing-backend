@@ -1,0 +1,4 @@
+name: Test server
+variables:
+  - name: baseUrl
+    value: http://localhost:3000
