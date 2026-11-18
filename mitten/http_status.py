@@ -1,4 +1,4 @@
-"""Constants for the missing backend."""
+"""HTTP status codes and reason phrases."""
 
 # HTTP status codes registered with IANA, with their RFC 9110 reason phrases:
 # https://www.iana.org/assignments/http-status-codes

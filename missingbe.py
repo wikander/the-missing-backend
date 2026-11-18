@@ -2,15 +2,18 @@
 
 Mocks are read from mitten-mock*.json files. The format is described in
 docs/mock-format.md, and the reasons for it in docs/adr/.
+
+This file is the addon: its options, its state and the hooks. The building
+blocks are in the mitten package. mitmproxy reloads this file when it
+changes, but not the mitten modules: restart mitmproxy after editing those
+(ADR 0010).
 """
 
 import asyncio
-import json
 import logging
 import os
 import random
 import weakref
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -18,18 +21,20 @@ from mitmproxy import command, ctx, exceptions, http
 from mitmproxy.addonmanager import Loader
 from mitmproxy.http import HTTPFlow
 
-from constants import BODYLESS_STATUS_CODES, HTTP_STATUS_PHRASES, RANDOM_STATUS_CODES
+from mitten.cors import CorsMode, add_cors_headers, build_preflight_response, is_preflight
+from mitten.mock_file import Mock, MockFileError, load_mock_files
+from mitten.responses import (
+    apply_part,
+    apply_response_part,
+    build_response,
+    drop_forbidden_body,
+    drop_head_body,
+)
+from mitten.sleep import NO_SLEEP, Sleep, SleepError, parse_sleep_text
 
-JSON = None | bool | int | float | str | list["JSON"] | dict[str, "JSON"]
-
-MOCK_FILE_PREFIX = "mitten-mock"
-MOCK_FILE_SUFFIX = ".json"
-DISABLED_PREFIX = "_x_"
 METADATA_KEY = "missingbe"
-JSON_CONTENT_TYPE = "application/json; charset=utf-8"
 
-KNOWN_MOCK_KEYS = {"path", "method", "request", "response"}
-KNOWN_PART_KEYS = {"statusCode", "headers", "body"}
+MOCK_DIR_OPTION = "mock_dir"
 
 # Prefixed so it can't collide with a query parameter the real backend uses.
 SLEEP_PARAM = "mitten-sleep"
@@ -37,401 +42,21 @@ DEFAULT_SLEEP_OPTION = "mitten_default_sleep"
 DEFAULT_SLEEP = "[50,700]"
 
 CORS_OPTION = "mitten_cors"
-CORS_OFF, CORS_MOCKS, CORS_ALL = "off", "mocks", "all"
-CORS_CHOICES = [CORS_OFF, CORS_MOCKS, CORS_ALL]
-DEFAULT_CORS = CORS_MOCKS
+DEFAULT_CORS = CorsMode.MOCKS
 
 
-class MockFileError(ValueError):
-    """A mock file that can't be loaded."""
+def absolute_path(path: str) -> str:
+    """A path relative to the current directory, made absolute."""
+    return str((Path.cwd() / Path(path)).resolve())
 
 
-class SleepError(ValueError):
-    """A sleep value that isn't an integer or a [min, max] pair."""
+def flow_metadata(flow: HTTPFlow) -> dict[str, Any]:
+    """This addon's entry in flow.metadata, created if missing.
 
-
-@dataclass(frozen=True)
-class Sleep:
-    """A delay in milliseconds: fixed when min_ms == max_ms, else random."""
-
-    min_ms: int
-    max_ms: int
-
-    def pick(self, rng: random.Random) -> int:
-        return rng.randint(self.min_ms, self.max_ms)
-
-
-NO_SLEEP = Sleep(0, 0)
-
-
-def _is_ms(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
-
-
-def parse_sleep(raw: Any) -> Sleep:
-    """Parse a decoded JSON sleep value: 500 or [200, 800], in milliseconds."""
-    if _is_ms(raw):
-        return Sleep(raw, raw)
-    if isinstance(raw, list) and len(raw) == 2 and all(_is_ms(v) for v in raw):
-        if raw[0] > raw[1]:
-            raise SleepError(f"{raw}: min is greater than max")
-        return Sleep(raw[0], raw[1])
-    raise SleepError(
-        f"{json.dumps(raw)}: expected milliseconds as a non-negative integer or [min, max]"
-    )
-
-
-def parse_sleep_text(text: str) -> Sleep:
-    """Parse a sleep value given as text, such as a query parameter or option."""
-    try:
-        raw = json.loads(text)
-    except json.JSONDecodeError:
-        raise SleepError(
-            f"{text!r}: expected milliseconds as a non-negative integer or [min, max]"
-        ) from None
-    return parse_sleep(raw)
-
-
-@dataclass
-class Header:
-    key: str
-    values: list[str]
-
-
-@dataclass(frozen=True)
-class StatusSpec:
-    """A statusCode: one or more choices, each a single code or a prefix's codes.
-
-    A choice is picked first and then a code within it, so in [2, 404] the
-    404 comes up half the time.
+    Only JSON values go in it, or saving flows with mitmdump -w breaks
+    (ADR 0004).
     """
-
-    choices: tuple[tuple[int, ...], ...]
-
-    def pick(self, rng: random.Random) -> int:
-        return rng.choice(rng.choice(self.choices))
-
-
-@dataclass
-class MockPart:
-    """The request or response part of a mock. Every field is optional."""
-
-    statusCode: Optional[StatusSpec] = None
-    headers: list[Header] = field(default_factory=list)
-    body: JSON = None  # None means "not set"
-
-    def sets_content_type(self) -> bool:
-        return any(h.key.lower() == "content-type" for h in self.headers)
-
-
-@dataclass
-class Mock:
-    path: str
-    source: str
-    methods: tuple[str, ...]  # upper case, never HEAD
-    request: Optional[MockPart] = None
-    response: Optional[MockPart] = None
-
-
-# ---- Parsing ---------------------------------------------------------------
-
-
-def parse_headers(raw: Any, where: str) -> list[Header]:
-    if raw is None:
-        return []
-    if not isinstance(raw, dict):
-        raise MockFileError(f"{where}.headers must be an object")
-
-    headers = []
-    for key, values in raw.items():
-        if key.startswith(DISABLED_PREFIX):
-            continue
-        if isinstance(values, str):
-            values = [values]
-        if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
-            raise MockFileError(f"{where}.headers.{key} must be a list of strings")
-        kept = [v for v in values if not v.startswith(DISABLED_PREFIX)]
-        if kept:
-            headers.append(Header(key=key, values=kept))
-    return headers
-
-
-STATUS_FORMAT = (
-    "an integer 100-999, a 1-2 digit prefix such as 4 or 40, or an array of those"
-)
-
-
-def parse_status_choice(raw: Any, where: str) -> tuple[int, ...]:
-    """One code (404), or every registered code starting with a prefix (4, 40)."""
-    if isinstance(raw, bool) or not isinstance(raw, int):
-        raise MockFileError(f"{where}.statusCode: {json.dumps(raw)} is not {STATUS_FORMAT}")
-    if 100 <= raw <= 999:
-        return (raw,)
-    if 1 <= raw <= 99:
-        prefix = str(raw)
-        codes = tuple(c for c in RANDOM_STATUS_CODES if str(c).startswith(prefix))
-        if not codes:
-            raise MockFileError(
-                f"{where}.statusCode: no status code to pick starts with {raw} "
-                "(1xx codes are never picked at random)"
-            )
-        return codes
-    raise MockFileError(f"{where}.statusCode: {raw} is not {STATUS_FORMAT}")
-
-
-def parse_status(raw: Any, where: str) -> Optional[StatusSpec]:
-    if raw is None:
-        return None
-    if isinstance(raw, list):
-        if not raw:
-            raise MockFileError(f"{where}.statusCode: an array needs at least one code")
-        return StatusSpec(tuple(parse_status_choice(r, where) for r in raw))
-    return StatusSpec((parse_status_choice(raw, where),))
-
-
-def parse_part(raw: Any, where: str) -> Optional[MockPart]:
-    if raw is None:
-        return None
-    if not isinstance(raw, dict):
-        raise MockFileError(f"{where} must be an object")
-
-    for key in raw.keys() - KNOWN_PART_KEYS:
-        logging.warning(f"{where}: unknown field '{key}' ignored")
-
-    return MockPart(
-        statusCode=parse_status(raw.get("statusCode"), where),
-        headers=parse_headers(raw.get("headers"), where),
-        body=raw.get("body"),
-    )
-
-
-METHOD_FORMAT = 'method is required: a method such as "GET", or an array such as ["GET", "POST"]'
-
-
-def parse_methods(raw: Any) -> tuple[str, ...]:
-    """The required method field: one method or an array of them, upper-cased.
-
-    HEAD is rejected: HEAD requests use the GET mocks, so a mock can't answer
-    HEAD differently from GET.
-    """
-    if raw is None:
-        raise MockFileError(METHOD_FORMAT)
-    items = raw if isinstance(raw, list) else [raw]
-    if not items or not all(isinstance(m, str) and m.strip() for m in items):
-        raise MockFileError(METHOD_FORMAT)
-    methods = tuple(m.strip().upper() for m in items)
-    if "HEAD" in methods:
-        raise MockFileError(
-            "method HEAD isn't allowed: HEAD requests use the GET mocks, "
-            "answered without the body"
-        )
-    return methods
-
-
-def parse_mock(data: Any, source: str) -> Mock:
-    if not isinstance(data, dict):
-        raise MockFileError("expected a JSON object")
-
-    path = data.get("path")
-    if not isinstance(path, str) or not path:
-        raise MockFileError("path is required and must be a non-empty string")
-
-    methods = parse_methods(data.get("method"))
-
-    for key in data.keys() - KNOWN_MOCK_KEYS:
-        logging.warning(f"{source}: unknown field '{key}' ignored")
-
-    return Mock(
-        path=path,
-        source=source,
-        methods=methods,
-        request=parse_part(data.get("request"), "request"),
-        response=parse_part(data.get("response"), "response"),
-    )
-
-
-def load_mock_files(directory: str) -> list[Mock]:
-    """Read and validate every mitten-mock*.json file in a directory.
-
-    Raises MockFileError naming the file if any of them is invalid, so a
-    caller can keep its previous mocks.
-    """
-    mocks = []
-    for entry in sorted(os.scandir(directory), key=lambda e: e.name):
-        if not (
-            entry.is_file()
-            and entry.name.startswith(MOCK_FILE_PREFIX)
-            and entry.name.endswith(MOCK_FILE_SUFFIX)
-        ):
-            continue
-        try:
-            with open(entry.path, "r", encoding="utf-8") as file:
-                data = json.load(file)
-            mocks.append(parse_mock(data, entry.name))
-        except (json.JSONDecodeError, MockFileError) as e:
-            raise MockFileError(f"{entry.name}: {e}") from e
-        logging.info(f"Mock file loaded: {entry.name}")
-    return mocks
-
-
-# ---- Applying mocks ----------------------------------------------------------
-
-
-def apply_part(message: http.Message, part: MockPart) -> None:
-    """Set a part's headers and body on a request or response.
-
-    Headers go first, so a Content-Type from the mock decides how the body
-    text is encoded.
-    """
-    for header in part.headers:
-        message.headers.set_all(header.key, header.values)
-
-    if part.body is not None:
-        if not part.sets_content_type():
-            message.headers["Content-Type"] = JSON_CONTENT_TYPE
-        message.text = json.dumps(part.body)
-
-
-def set_status(response: http.Response, code: int) -> None:
-    """Set the status code and its reason phrase.
-
-    mitmproxy doesn't update the reason when status_code changes, and its
-    own table has older phrases, so the reason always comes from constants.
-    Unregistered codes get an empty reason.
-    """
-    response.status_code = code
-    response.reason = HTTP_STATUS_PHRASES.get(code, "")
-
-
-def drop_forbidden_body(response: http.Response, source: str) -> None:
-    """Remove a body the status code doesn't allow (RFC 9110).
-
-    1xx, 204, 205 and 304 responses have no content. A client doesn't read a
-    body sent with them anyway, and the leftover bytes would be taken as the
-    start of the next response on the same connection.
-    """
-    code = response.status_code
-    if not (100 <= code < 200 or code in BODYLESS_STATUS_CODES):
-        return
-    length = len(response.raw_content or b"")
-    if not length:
-        return
-    response.content = b""
-    if code == 304:
-        # A 304 describes the stored response, so Content-Length and
-        # Content-Type may stay, giving the length the full body would have.
-        response.headers["Content-Length"] = str(length)
-    else:
-        response.headers.pop("Content-Type", None)
-        if code == 205:
-            response.headers["Content-Length"] = "0"
-        else:
-            response.headers.pop("Content-Length", None)
-    logging.warning(f"{source}: a {code} response must not have a body; {length} bytes dropped")
-
-
-def drop_head_body(response: http.Response) -> None:
-    """Answer a HEAD request like the GET would be answered, minus the body.
-
-    Content-Length keeps the length the GET body would have, as RFC 9110
-    allows for HEAD; Content-Type and the other headers stay as they are.
-    """
-    length = len(response.raw_content or b"")
-    if not length:
-        return
-    response.content = b""
-    response.headers["Content-Length"] = str(length)
-
-
-def is_preflight(request: http.Request) -> bool:
-    """A CORS preflight: an OPTIONS request a browser sends before the real one."""
-    return (
-        request.method.upper() == "OPTIONS"
-        and "Origin" in request.headers
-        and "Access-Control-Request-Method" in request.headers
-    )
-
-
-def merge_vary(response: http.Response, *names: str) -> None:
-    existing = [v.strip() for v in response.headers.get("Vary", "").split(",") if v.strip()]
-    lower = {v.lower() for v in existing}
-    response.headers["Vary"] = ", ".join(existing + [n for n in names if n.lower() not in lower])
-
-
-def build_preflight_response(request: http.Request) -> http.Response:
-    """Allow whatever the preflight asks for, for the origin that asks."""
-    response = http.Response.make()
-    set_status(response, 204)
-    response.headers.pop("Content-Length", None)  # a 204 has no content
-    response.headers["Access-Control-Allow-Origin"] = request.headers["Origin"]
-    response.headers["Access-Control-Allow-Methods"] = request.headers["Access-Control-Request-Method"]
-    if "Access-Control-Request-Headers" in request.headers:
-        response.headers["Access-Control-Allow-Headers"] = request.headers[
-            "Access-Control-Request-Headers"
-        ]
-    response.headers["Access-Control-Allow-Credentials"] = "true"
-    # No Access-Control-Max-Age: browsers then cache the answer for 5 s only,
-    # so changing mitten_cors takes effect right away.
-    merge_vary(
-        response, "Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers"
-    )
-    return response
-
-
-def add_cors_headers(response: http.Response, origin: str) -> None:
-    """Let the page from origin read this response, cookies and headers included.
-
-    Echoing the origin, not "*", is what allows credentials.
-    """
-    response.headers["Access-Control-Allow-Origin"] = origin
-    response.headers["Access-Control-Allow-Credentials"] = "true"
-    exposed = sorted(
-        {name for name in response.headers.keys() if not name.lower().startswith("access-control-")}
-    )
-    if exposed:
-        response.headers["Access-Control-Expose-Headers"] = ", ".join(exposed)
-    merge_vary(response, "Origin")
-
-
-def build_response(part: MockPart, rng: random.Random) -> http.Response:
-    assert part.statusCode is not None
-    response = http.Response.make()
-    set_status(response, part.statusCode.pick(rng))
-    apply_part(response, part)
-    return response
-
-
-def apply_response_part(response: http.Response, part: MockPart, rng: random.Random) -> None:
-    if part.statusCode is not None:
-        set_status(response, part.statusCode.pick(rng))
-    apply_part(response, part)
-
-
-# ---- Path specificity ----------------------------------------------------------
-
-LITERAL_SEGMENT, PARAM_SEGMENT, PATTERN_END, WILDCARD_SEGMENT = 3, 2, 1, 0
-
-
-def path_specificity(pattern: str) -> tuple[int, ...]:
-    """A sort key: higher is more specific.
-
-    Segments are compared left to right, and at the first that differs a
-    literal beats a :param, which beats :*. Segments after :* are never
-    compared, so the key stops there. A pattern without :* ends with
-    PATTERN_END, so /a beats /a/:* for the path /a: two patterns matching
-    the same path can only differ there by one ending where the other has :*.
-    """
-    key = []
-    for part in (p for p in pattern.split("/") if p):
-        if part.startswith(":*"):
-            key.append(WILDCARD_SEGMENT)
-            return tuple(key)
-        key.append(PARAM_SEGMENT if part.startswith(":") else LITERAL_SEGMENT)
-    key.append(PATTERN_END)
-    return tuple(key)
-
-
-# ---- Addon -------------------------------------------------------------------
+    return flow.metadata.setdefault(METADATA_KEY, {})
 
 
 class MissingBe:
@@ -439,89 +64,18 @@ class MissingBe:
         self.mocks: list[Mock] = []
         # The mock each live flow matched, for the response hook. Kept out of
         # flow.metadata, which must stay serializable (ADR 0004).
-        self.flow_mocks: weakref.WeakKeyDictionary[HTTPFlow, Mock] = (
-            weakref.WeakKeyDictionary()
-        )
+        self.flow_mocks: weakref.WeakKeyDictionary[HTTPFlow, Mock] = weakref.WeakKeyDictionary()
         # No delay until configure() reads the option, so tests that build the
         # addon directly don't wait.
         self.default_sleep: Sleep = NO_SLEEP
-        self.cors: str = DEFAULT_CORS
+        self.cors: CorsMode = DEFAULT_CORS
         self.rng = random.Random()
 
-    def comparePaths(self, abstractPath: str, path: str):
-        abstractPathParts = [p for p in abstractPath.split("/") if p]
-        pathParts = [p for p in path.split("/") if p]
-
-        wildcard = next((i for i, p in enumerate(abstractPathParts) if p.startswith(":*")), None)
-
-        if wildcard is None:
-            if len(abstractPathParts) != len(pathParts):
-                return None
-        elif len(pathParts) < wildcard:
-            # Every segment before :* must be there; :* may match none.
-            return None
-
-        params = {}
-        for a, b in zip(abstractPathParts, pathParts):
-            if a.startswith(":*"):
-                return params
-            if a.startswith(":"):
-                params[a[1:]] = b
-            elif a != b:
-                return None
-
-        return params
-
-    def getAbsolutePath(self, path_str: str):
-        return str((Path.cwd() / Path(path_str)).resolve())
-
-    def loadMockFiles(self, path: str) -> None:
-        absolutePath = self.getAbsolutePath(path)
-        logging.info(f"Loading mock files from {absolutePath}")
-        # Only replaced when every file is valid.
-        self.mocks = load_mock_files(absolutePath)
-        logging.info(f"{len(self.mocks)} mock(s) loaded")
-
-    def matchingMocks(self, path: str, method: str) -> list[Mock]:
-        path = path.split("?", 1)[0]
-        method = method.upper()
-        if method == "HEAD":
-            method = "GET"  # HEAD is a GET without the body (RFC 9110)
-        return [
-            mock
-            for mock in self.mocks
-            if method in mock.methods and self.comparePaths(mock.path, path) is not None
-        ]
-
-    def findMock(self, flow: HTTPFlow) -> Optional[Mock]:
-        """The most specific matching mock (see path_specificity). Mocks with
-        equally specific patterns are variants, picked at random."""
-        candidates = self.matchingMocks(flow.request.path, flow.request.method)
-        if not candidates:
-            return None
-        best = max(path_specificity(mock.path) for mock in candidates)
-        return random.choice([m for m in candidates if path_specificity(m.path) == best])
-
-    def answersPreflight(self, request: http.Request) -> bool:
-        """Whether mitten_cors has the addon answer this preflight itself.
-
-        With "mocks", only when the real request may be short-circuited: then
-        no server will answer it, so the server can't answer the preflight
-        either. Requests a mock forwards keep the server's own CORS.
-        """
-        if self.cors == CORS_ALL:
-            return True
-        if self.cors == CORS_MOCKS:
-            method = request.headers["Access-Control-Request-Method"]
-            return any(
-                mock.request is not None and mock.request.statusCode is not None
-                for mock in self.matchingMocks(request.path, method)
-            )
-        return False
+    # ---- Options and commands -------------------------------------------------
 
     def load(self, loader: Loader):
         loader.add_option(
-            name="mock_dir",
+            name=MOCK_DIR_OPTION,
             typespec=str,
             default=".",
             help="Directory to load mitten-mock*.json files from, relative to the current directory.",
@@ -538,8 +92,8 @@ class MissingBe:
         loader.add_option(
             name=CORS_OPTION,
             typespec=str,
-            default=DEFAULT_CORS,
-            choices=CORS_CHOICES,
+            default=DEFAULT_CORS.value,
+            choices=[mode.value for mode in CorsMode],
             help=(
                 "CORS for browser frontends on another origin. mocks: answer preflights "
                 "and add CORS headers for short-circuited requests. all: for every "
@@ -549,44 +103,87 @@ class MissingBe:
 
     def configure(self, updated: set[str]):
         if CORS_OPTION in updated:
-            # mitmproxy only uses choices for help text; --set accepts anything.
-            value = getattr(ctx.options, CORS_OPTION)
-            if value not in CORS_CHOICES:
-                raise exceptions.OptionsError(
-                    f"{CORS_OPTION}: {value!r} is not one of {', '.join(CORS_CHOICES)}"
-                )
-            self.cors = value
-            if self.cors == CORS_ALL:
-                logging.warning(
-                    f"{CORS_OPTION}=all: every response can be read by any website, "
-                    "with cookies. Only use it with a proxy nothing else browses through."
-                )
-
+            self.configure_cors(getattr(ctx.options, CORS_OPTION))
         if DEFAULT_SLEEP_OPTION in updated:
-            text = getattr(ctx.options, DEFAULT_SLEEP_OPTION)
-            try:
-                self.default_sleep = parse_sleep_text(text)
-            except SleepError as e:
-                raise exceptions.OptionsError(f"{DEFAULT_SLEEP_OPTION}: {e}") from e
+            self.configure_default_sleep(getattr(ctx.options, DEFAULT_SLEEP_OPTION))
+        if MOCK_DIR_OPTION in updated:
+            self.configure_mock_dir(getattr(ctx.options, MOCK_DIR_OPTION))
 
-        if "mock_dir" in updated:
-            directory = ctx.options.mock_dir
-            if not os.path.isdir(self.getAbsolutePath(directory)):
-                raise exceptions.OptionsError(f"mock_dir: not a directory: {directory}")
-            try:
-                self.loadMockFiles(directory)
-            except MockFileError as e:
-                raise exceptions.OptionsError(f"mock_dir: {e}") from e
+    def configure_cors(self, value: str) -> None:
+        # mitmproxy only uses choices for help text; --set accepts anything.
+        try:
+            self.cors = CorsMode(value)
+        except ValueError:
+            choices = ", ".join(mode.value for mode in CorsMode)
+            raise exceptions.OptionsError(f"{CORS_OPTION}: {value!r} is not one of {choices}") from None
+        if self.cors == CorsMode.ALL:
+            logging.warning(
+                f"{CORS_OPTION}=all: every response can be read by any website, "
+                "with cookies. Only use it with a proxy nothing else browses through."
+            )
+
+    def configure_default_sleep(self, text: str) -> None:
+        try:
+            self.default_sleep = parse_sleep_text(text)
+        except SleepError as e:
+            raise exceptions.OptionsError(f"{DEFAULT_SLEEP_OPTION}: {e}") from e
+
+    def configure_mock_dir(self, directory: str) -> None:
+        if not os.path.isdir(absolute_path(directory)):
+            raise exceptions.OptionsError(f"{MOCK_DIR_OPTION}: not a directory: {directory}")
+        try:
+            self.load_mock_files(directory)
+        except MockFileError as e:
+            raise exceptions.OptionsError(f"{MOCK_DIR_OPTION}: {e}") from e
 
     @command.command("missingbe.reload")
     def reload(self) -> None:
         """Re-read the mock files from mock_dir."""
         try:
-            self.loadMockFiles(ctx.options.mock_dir)
+            self.load_mock_files(getattr(ctx.options, MOCK_DIR_OPTION))
         except MockFileError as e:
             raise exceptions.CommandError(f"Reload failed, keeping previous mocks: {e}") from e
 
-    def requestSleep(self, flow: HTTPFlow) -> Sleep:
+    def load_mock_files(self, directory: str) -> None:
+        path = absolute_path(directory)
+        logging.info(f"Loading mock files from {path}")
+        # Only replaced when every file is valid.
+        self.mocks = load_mock_files(path)
+        logging.info(f"{len(self.mocks)} mock(s) loaded")
+
+    # ---- Matching --------------------------------------------------------------
+
+    def matching_mocks(self, path: str, method: str) -> list[Mock]:
+        path = path.split("?", 1)[0]
+        method = method.upper()
+        if method == "HEAD":
+            method = "GET"  # HEAD is a GET without the body (RFC 9110)
+        return [mock for mock in self.mocks if method in mock.methods and mock.path.matches(path)]
+
+    def find_mock(self, flow: HTTPFlow) -> Optional[Mock]:
+        """The mock with the most specific path (ADR 0009). Mocks with equally
+        specific paths are variants, picked at random."""
+        candidates = self.matching_mocks(flow.request.path, flow.request.method)
+        if not candidates:
+            return None
+        best = max(mock.path.specificity for mock in candidates)
+        return random.choice([m for m in candidates if m.path.specificity == best])
+
+    def answers_preflight(self, request: http.Request) -> bool:
+        """Whether mitten_cors has the addon answer this preflight itself.
+
+        With "mocks", only when the real request may be short-circuited: then
+        no server will answer it, so the server can't answer the preflight
+        either. Requests a mock forwards keep the server's own CORS.
+        """
+        if self.cors == CorsMode.ALL:
+            return True
+        if self.cors == CorsMode.MOCKS:
+            method = request.headers["Access-Control-Request-Method"]
+            return any(mock.short_circuits for mock in self.matching_mocks(request.path, method))
+        return False
+
+    def request_sleep(self, flow: HTTPFlow) -> Sleep:
         """The ?mitten-sleep= value, removed from the request, or the default."""
         # Only touch the query when the param is there: changing it re-encodes
         # the whole query string (?flag becomes ?flag=).
@@ -600,37 +197,37 @@ class MissingBe:
             logging.warning(f"{SLEEP_PARAM} ignored, using {DEFAULT_SLEEP_OPTION}: {e}")
             return self.default_sleep
 
+    # ---- Hooks -----------------------------------------------------------------
+
     async def request(self, flow: HTTPFlow):
-        sleep_ms = self.requestSleep(flow).pick(self.rng)
+        sleep_ms = self.request_sleep(flow).pick(self.rng)
         if sleep_ms:
-            flow.metadata[METADATA_KEY] = {"sleep_ms": sleep_ms}
+            flow_metadata(flow)["sleep_ms"] = sleep_ms
             # asyncio.sleep only pauses this flow; time.sleep would block
             # mitmproxy's event loop and stall every other request too.
             await asyncio.sleep(sleep_ms / 1000)
 
-        if is_preflight(flow.request) and self.answersPreflight(flow.request):
+        if is_preflight(flow.request) and self.answers_preflight(flow.request):
             logging.info(f"CORS preflight for {flow.request.path} answered ({CORS_OPTION}={self.cors})")
             flow.response = build_preflight_response(flow.request)
-            flow.metadata.setdefault(METADATA_KEY, {})["cors_preflight"] = True
+            flow_metadata(flow)["cors_preflight"] = True
             return
 
-        mock = self.findMock(flow)
+        mock = self.find_mock(flow)
         if mock is None:
             return
 
         logging.info(f"{flow.request.method} {flow.request.path} matched {mock.source}")
         self.flow_mocks[flow] = mock
-        metadata = flow.metadata.setdefault(METADATA_KEY, {})
-        metadata["mock"] = mock.source
+        flow_metadata(flow)["mock"] = mock.source
 
-        part = mock.request
-        if part is None:
+        if mock.request is None:
             return
-        if part.statusCode is not None:
-            flow.response = build_response(part, self.rng)  # short-circuit
-            metadata["short_circuit"] = True
+        if mock.short_circuits:
+            flow.response = build_response(mock.request, self.rng)
+            flow_metadata(flow)["short_circuit"] = True
         else:
-            apply_part(flow.request, part)
+            apply_part(flow.request, mock.request)
 
     def response(self, flow: HTTPFlow):
         assert flow.response is not None  # mitmproxy only calls this hook with a response
@@ -642,15 +239,15 @@ class MissingBe:
             drop_forbidden_body(flow.response, mock.source)
             if flow.request.method.upper() == "HEAD":
                 drop_head_body(flow.response)
-        self.applyCors(flow)
+        self.apply_cors(flow)
 
-    def applyCors(self, flow: HTTPFlow) -> None:
+    def apply_cors(self, flow: HTTPFlow) -> None:
         assert flow.response is not None
-        metadata = flow.metadata.get(METADATA_KEY, {})
         origin = flow.request.headers.get("Origin")
+        metadata = flow.metadata.get(METADATA_KEY, {})
         if not origin or metadata.get("cors_preflight"):
             return
-        if self.cors == CORS_ALL or (self.cors == CORS_MOCKS and metadata.get("short_circuit")):
+        if self.cors == CorsMode.ALL or (self.cors == CorsMode.MOCKS and metadata.get("short_circuit")):
             add_cors_headers(flow.response, origin)
 
 

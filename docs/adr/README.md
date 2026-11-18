@@ -14,3 +14,4 @@ Why the project is built the way it is. See
 | [0007](0007-required-method-and-no-forbidden-bodies.md) | Required `method`, HEAD as GET, no forbidden bodies | Accepted |
 | [0008](0008-cors-for-mocks.md) | CORS for mocked responses | Accepted |
 | [0009](0009-most-specific-path-wins.md) | The most specific path wins | Accepted |
+| [0010](0010-mitten-package-layout.md) | Topic modules in a `mitten` package | Accepted |

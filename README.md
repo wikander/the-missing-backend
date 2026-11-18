@@ -118,6 +118,14 @@ A mock matches on `path` and `method`. Its `request` part either answers the req
 
 The full reference is in [docs/mock-format.md](docs/mock-format.md). What happens when a part or field is left out is listed under [Default behaviour](#default-behaviour).
 
+## Code layout
+
+- `missingbe.py`: the addon: its options and the request and response hooks.
+- `mitten/`: the building blocks, one module per topic (mock files, path patterns, delays, responses, CORS, status codes).
+- `tests/`: the tests, one file per topic. Run them with `python -m pytest -q`.
+
+mitmproxy reloads `missingbe.py` when you save it, but not the modules in `mitten/`. Restart mitmproxy after editing those.
+
 ## Project docs
 
 - [docs/mock-format.md](docs/mock-format.md): mock file reference

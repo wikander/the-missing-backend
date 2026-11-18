@@ -4,7 +4,8 @@ Date: 2026-11-18
 
 ## Status
 
-Accepted
+Accepted. `constants.py` is now `mitten/http_status.py`
+([ADR 0010](0010-mitten-package-layout.md)).
 
 ## Context
 

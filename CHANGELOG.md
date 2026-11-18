@@ -31,7 +31,7 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `statusCode` can be a 1–2 digit prefix (`4`, `40`) for a random registered
   code, or an array of codes and prefixes to pick from, picked again for
   every request ([ADR 0006](docs/adr/0006-random-status-codes.md)).
-- `constants.py` with the registered HTTP status codes and their reason
+- `mitten/http_status.py` with the registered HTTP status codes and their reason
   phrases.
 - `mitten_cors` option, `mocks` by default: CORS preflights for requests a
   mock short-circuits are answered by the addon, and short-circuited
@@ -58,7 +58,12 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   wins, instead of a random one: `/users/me` beats `/users/:id`, which beats
   `/users/:*`. Mocks with equally specific paths are still picked at random
   ([ADR 0009](docs/adr/0009-most-specific-path-wins.md)).
-- Reason phrases come from `constants.py` with the RFC 9110 wording (for
+- The code is split into the addon, `missingbe.py`, and topic modules in
+  a `mitten/` package; `constants.py` is now `mitten/http_status.py`, and
+  the tests are in `tests/`. mitmproxy's reload on save only covers
+  `missingbe.py`: restart it after editing `mitten/`
+  ([ADR 0010](docs/adr/0010-mitten-package-layout.md)).
+- Reason phrases come from `mitten/http_status.py` with the RFC 9110 wording (for
   example `Request Timeout`, not `Request Time-out`). 444 and 499, which
   aren't registered, now get an empty reason.
 - Mock headers are set on the response (or on the forwarded request when

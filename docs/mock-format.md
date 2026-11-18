@@ -77,14 +77,14 @@ Requests that match no mock pass through untouched.
 | `[2, 404]` | 2xx or 404, half the time each, then a random code within the 2xx |
 
 - **Prefixes.** An integer with one or two digits is a prefix. It picks among
-  the registered codes in `constants.py` that start with it. 1xx codes are
+  the registered codes in `mitten/http_status.py` that start with it. 1xx codes are
   never picked at random, so `1` and `10` are rejected, as is a prefix no
   code starts with (`6`, `48`).
 - **Arrays** are sets of codes and prefixes, never ranges. An element is
   picked first, and then a code within it, so `[200, 200, 500]` gives 200
   two times in three. An empty array is rejected.
 - **A new pick for every request.**
-- **Reason phrase.** The reason (`Not Found`) is taken from `constants.py`,
+- **Reason phrase.** The reason (`Not Found`) is taken from `mitten/http_status.py`,
   with the RFC 9110 wording. Unregistered codes get an empty reason. HTTP/2
   and HTTP/3 have no reason phrase.
 - **Bodies.** The `body` is sent whatever code is picked, including codes
