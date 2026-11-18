@@ -36,6 +36,11 @@ SLEEP_PARAM = "mitten-sleep"
 DEFAULT_SLEEP_OPTION = "mitten_default_sleep"
 DEFAULT_SLEEP = "[50,700]"
 
+CORS_OPTION = "mitten_cors"
+CORS_OFF, CORS_MOCKS, CORS_ALL = "off", "mocks", "all"
+CORS_CHOICES = [CORS_OFF, CORS_MOCKS, CORS_ALL]
+DEFAULT_CORS = CORS_MOCKS
+
 
 class MockFileError(ValueError):
     """A mock file that can't be loaded."""
@@ -338,6 +343,56 @@ def drop_head_body(response: http.Response) -> None:
     response.headers["Content-Length"] = str(length)
 
 
+def is_preflight(request: http.Request) -> bool:
+    """A CORS preflight: an OPTIONS request a browser sends before the real one."""
+    return (
+        request.method.upper() == "OPTIONS"
+        and "Origin" in request.headers
+        and "Access-Control-Request-Method" in request.headers
+    )
+
+
+def merge_vary(response: http.Response, *names: str) -> None:
+    existing = [v.strip() for v in response.headers.get("Vary", "").split(",") if v.strip()]
+    lower = {v.lower() for v in existing}
+    response.headers["Vary"] = ", ".join(existing + [n for n in names if n.lower() not in lower])
+
+
+def build_preflight_response(request: http.Request) -> http.Response:
+    """Allow whatever the preflight asks for, for the origin that asks."""
+    response = http.Response.make()
+    set_status(response, 204)
+    response.headers.pop("Content-Length", None)  # a 204 has no content
+    response.headers["Access-Control-Allow-Origin"] = request.headers["Origin"]
+    response.headers["Access-Control-Allow-Methods"] = request.headers["Access-Control-Request-Method"]
+    if "Access-Control-Request-Headers" in request.headers:
+        response.headers["Access-Control-Allow-Headers"] = request.headers[
+            "Access-Control-Request-Headers"
+        ]
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    # No Access-Control-Max-Age: browsers then cache the answer for 5 s only,
+    # so changing mitten_cors takes effect right away.
+    merge_vary(
+        response, "Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers"
+    )
+    return response
+
+
+def add_cors_headers(response: http.Response, origin: str) -> None:
+    """Let the page from origin read this response, cookies and headers included.
+
+    Echoing the origin, not "*", is what allows credentials.
+    """
+    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    exposed = sorted(
+        {name for name in response.headers.keys() if not name.lower().startswith("access-control-")}
+    )
+    if exposed:
+        response.headers["Access-Control-Expose-Headers"] = ", ".join(exposed)
+    merge_vary(response, "Origin")
+
+
 def build_response(part: MockPart, rng: random.Random) -> http.Response:
     assert part.statusCode is not None
     response = http.Response.make()
@@ -366,6 +421,7 @@ class MissingBe:
         # No delay until configure() reads the option, so tests that build the
         # addon directly don't wait.
         self.default_sleep: Sleep = NO_SLEEP
+        self.cors: str = DEFAULT_CORS
         self.rng = random.Random()
 
     def comparePaths(self, abstractPath: str, path: str):
@@ -398,18 +454,37 @@ class MissingBe:
         self.mocks = load_mock_files(absolutePath)
         logging.info(f"{len(self.mocks)} mock(s) loaded")
 
-    def findMock(self, flow: HTTPFlow) -> Optional[Mock]:
-        path = flow.request.path.split("?", 1)[0]
-        method = flow.request.method.upper()
+    def matchingMocks(self, path: str, method: str) -> list[Mock]:
+        path = path.split("?", 1)[0]
+        method = method.upper()
         if method == "HEAD":
             method = "GET"  # HEAD is a GET without the body (RFC 9110)
-        candidates = [
+        return [
             mock
             for mock in self.mocks
-            if method in mock.methods
-            and self.comparePaths(mock.path, path) is not None
+            if method in mock.methods and self.comparePaths(mock.path, path) is not None
         ]
+
+    def findMock(self, flow: HTTPFlow) -> Optional[Mock]:
+        candidates = self.matchingMocks(flow.request.path, flow.request.method)
         return random.choice(candidates) if candidates else None
+
+    def answersPreflight(self, request: http.Request) -> bool:
+        """Whether mitten_cors has the addon answer this preflight itself.
+
+        With "mocks", only when the real request may be short-circuited: then
+        no server will answer it, so the server can't answer the preflight
+        either. Requests a mock forwards keep the server's own CORS.
+        """
+        if self.cors == CORS_ALL:
+            return True
+        if self.cors == CORS_MOCKS:
+            method = request.headers["Access-Control-Request-Method"]
+            return any(
+                mock.request is not None and mock.request.statusCode is not None
+                for mock in self.matchingMocks(request.path, method)
+            )
+        return False
 
     def load(self, loader: Loader):
         loader.add_option(
@@ -427,8 +502,33 @@ class MissingBe:
                 "or [min,max] for a random delay. 0 turns it off."
             ),
         )
+        loader.add_option(
+            name=CORS_OPTION,
+            typespec=str,
+            default=DEFAULT_CORS,
+            choices=CORS_CHOICES,
+            help=(
+                "CORS for browser frontends on another origin. mocks: answer preflights "
+                "and add CORS headers for short-circuited requests. all: for every "
+                "request, overriding the server's CORS (only for local use). off: never."
+            ),
+        )
 
     def configure(self, updated: set[str]):
+        if CORS_OPTION in updated:
+            # mitmproxy only uses choices for help text; --set accepts anything.
+            value = getattr(ctx.options, CORS_OPTION)
+            if value not in CORS_CHOICES:
+                raise exceptions.OptionsError(
+                    f"{CORS_OPTION}: {value!r} is not one of {', '.join(CORS_CHOICES)}"
+                )
+            self.cors = value
+            if self.cors == CORS_ALL:
+                logging.warning(
+                    f"{CORS_OPTION}=all: every response can be read by any website, "
+                    "with cookies. Only use it with a proxy nothing else browses through."
+                )
+
         if DEFAULT_SLEEP_OPTION in updated:
             text = getattr(ctx.options, DEFAULT_SLEEP_OPTION)
             try:
@@ -475,33 +575,50 @@ class MissingBe:
             # mitmproxy's event loop and stall every other request too.
             await asyncio.sleep(sleep_ms / 1000)
 
+        if is_preflight(flow.request) and self.answersPreflight(flow.request):
+            logging.info(f"CORS preflight for {flow.request.path} answered ({CORS_OPTION}={self.cors})")
+            flow.response = build_preflight_response(flow.request)
+            flow.metadata.setdefault(METADATA_KEY, {})["cors_preflight"] = True
+            return
+
         mock = self.findMock(flow)
         if mock is None:
             return
 
         logging.info(f"{flow.request.method} {flow.request.path} matched {mock.source}")
         self.flow_mocks[flow] = mock
-        flow.metadata.setdefault(METADATA_KEY, {})["mock"] = mock.source
+        metadata = flow.metadata.setdefault(METADATA_KEY, {})
+        metadata["mock"] = mock.source
 
         part = mock.request
         if part is None:
             return
         if part.statusCode is not None:
             flow.response = build_response(part, self.rng)  # short-circuit
+            metadata["short_circuit"] = True
         else:
             apply_part(flow.request, part)
 
     def response(self, flow: HTTPFlow):
-        mock = self.flow_mocks.get(flow)
-        if mock is None:
-            return
         assert flow.response is not None  # mitmproxy only calls this hook with a response
-        if mock.response is not None:
-            apply_response_part(flow.response, mock.response, self.rng)
-        # Also for a server's own 304 that a response part gave a body.
-        drop_forbidden_body(flow.response, mock.source)
-        if flow.request.method.upper() == "HEAD":
-            drop_head_body(flow.response)
+        mock = self.flow_mocks.get(flow)
+        if mock is not None:
+            if mock.response is not None:
+                apply_response_part(flow.response, mock.response, self.rng)
+            # Also for a server's own 304 that a response part gave a body.
+            drop_forbidden_body(flow.response, mock.source)
+            if flow.request.method.upper() == "HEAD":
+                drop_head_body(flow.response)
+        self.applyCors(flow)
+
+    def applyCors(self, flow: HTTPFlow) -> None:
+        assert flow.response is not None
+        metadata = flow.metadata.get(METADATA_KEY, {})
+        origin = flow.request.headers.get("Origin")
+        if not origin or metadata.get("cors_preflight"):
+            return
+        if self.cors == CORS_ALL or (self.cors == CORS_MOCKS and metadata.get("short_circuit")):
+            add_cors_headers(flow.response, origin)
 
 
 addons = [MissingBe()]

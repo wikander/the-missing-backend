@@ -12,3 +12,4 @@ Why the project is built the way it is. See
 | [0005](0005-mitten-sleep.md) | `mitten-sleep` delays with a random default | Accepted |
 | [0006](0006-random-status-codes.md) | Status code prefixes and sets | Accepted |
 | [0007](0007-required-method-and-no-forbidden-bodies.md) | Required `method`, HEAD as GET, no forbidden bodies | Accepted |
+| [0008](0008-cors-for-mocks.md) | CORS for mocked responses | Accepted |

@@ -33,6 +33,11 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   every request ([ADR 0006](docs/adr/0006-random-status-codes.md)).
 - `constants.py` with the registered HTTP status codes and their reason
   phrases.
+- `mitten_cors` option, `mocks` by default: CORS preflights for requests a
+  mock short-circuits are answered by the addon, and short-circuited
+  responses get CORS headers, so mocked endpoints work from a frontend on
+  another origin. `all` does it for every request; `off` never
+  ([ADR 0008](docs/adr/0008-cors-for-mocks.md)).
 
 ### Changed
 

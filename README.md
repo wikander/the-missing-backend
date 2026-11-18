@@ -24,6 +24,7 @@ What the missing backend does when you don't configure anything.
 |---|---|---|
 | `mock_dir` | `.` (the directory you start mitmproxy in) | Where `mitten-mock*.json` files are loaded from. |
 | `mitten_default_sleep` | `[50,700]` | Delay in ms for requests without `?mitten-sleep=`. `0` turns it off. |
+| `mitten_cors` | `mocks` | CORS for browser frontends on another origin: `off`, `mocks` or `all`. See [CORS](#cors). |
 
 Set them with `--set name=value` on the command line, or `:set name=value` in mitmproxy.
 
@@ -35,6 +36,22 @@ Set them with `--set name=value` on the command line, or `:set name=value` in mi
 2. **`mitten-sleep` removed.** The parameter never reaches the server. All other query parameters, including a plain `sleep`, are forwarded.
 3. **Matched against the mocks.** The query string is ignored when matching. If several mocks match, one is picked at random for each request.
 4. **No match: passed through untouched.** The request goes to the server, and the server's response comes back unchanged.
+
+### CORS
+
+A browser only lets a page read a response from another origin (scheme, host and port) if the response has `Access-Control-Allow-Origin`. For most API calls it first sends an `OPTIONS` preflight, which must be answered with the right `Access-Control-Allow-*` headers. A short-circuited mock has no server to send those headers, so without help, mocked endpoints fail in the browser with CORS errors while real ones work.
+
+| `mitten_cors` | Preflights | CORS headers added to |
+|---|---|---|
+| `off` | forwarded like any request | nothing |
+| `mocks` (default) | answered by the addon when a mock would short-circuit the real request (same path, requested method) | short-circuited responses |
+| `all` | all answered by the addon | every response, replacing the server's own CORS headers |
+
+- A preflight is an `OPTIONS` request with `Origin` and `Access-Control-Request-Method`. The addon answers `204` allowing the requesting origin, the requested method and headers, and credentials. Any other `OPTIONS` request is matched against `OPTIONS` mocks as usual.
+- The headers added to a response are `Access-Control-Allow-Origin` (the request's `Origin`, so cookies work), `Access-Control-Allow-Credentials: true`, `Access-Control-Expose-Headers` (all of the response's headers, so the page can read `Location` or `X-Mocked`) and `Vary: Origin`. Requests without `Origin` get none.
+- With `mocks`, everything that reaches the server keeps the server's real CORS behaviour, so CORS mistakes in the backend still show.
+- **Only use `all` locally.** It lets any website read every response through the proxy, with your cookies. Through a regular proxy that your browser uses for everything, that turns off the browser's protection for every site. mitmproxy logs a warning when it's set.
+- Same-origin setups, such as a frontend dev server that proxies `/api`, never trigger CORS, so the option makes no difference there.
 
 ### Mock files
 
