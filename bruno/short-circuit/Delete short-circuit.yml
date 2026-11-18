@@ -1,0 +1,26 @@
+info:
+  name: Delete short-circuit
+  type: http
+  seq: 5
+http:
+  method: DELETE
+  url: "{{baseUrl}}/short-circuit"
+  params:
+    - name: sleep
+      value: "2000"
+      type: query
+      description: "missingbe: delay the request this many ms in mitmproxy; removed before forwarding"
+      disabled: true
+  auth: inherit
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+docs: |-
+  Through mitmproxy these are answered by the mitten-mock-short-circuit-*.json
+  mocks and never reach the test server, so its log stays empty.
+
+  **Test server directly:** 204 with an empty body.
+
+  **Through mitmproxy:** 204 with an empty body.

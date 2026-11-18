@@ -22,13 +22,20 @@ Use the test server
     python test-server.py
 ```
 
-The test-server then start on localhost 3000. GET/POST/PUT/PATCH/DELETE request against http://localhost:3000/test, POST/PUT/PATCH accepts a josn body that is echoed back.
+The test server then starts on localhost 3000. It answers GET/POST/PUT/PATCH/DELETE on two paths. `data` in the response is a dummy record for GET, the dummy with your JSON body merged in for PATCH, and your JSON body for POST and PUT:
 
-Run the missing backend in front of the test-server by running
+- `/short-circuit`: the `mitten-mock-short-circuit-*.json` mocks in `example-responses/` answer these in the proxy, so they never reach the server.
+- `/fall-through`: the `mitten-mock-fall-through-*.json` mocks alter the request and response, but the request is still forwarded to the server.
+
+The server logs every request it receives (method, path with query, headers and body), so its log shows what got through the proxy.
+
+Run the missing backend in front of the test server with the example mocks:
 
 ```
-mitmproxy --mode reverse:http://localhost:3000 -s ./missingbe.py --ssl-insecure -p 3001
+mitmproxy --mode reverse:http://localhost:3000 -s ./missingbe.py --set mock_dir=./example-responses -p 3001
 ```
+
+The Bruno collection in `bruno/` has a request for each endpoint, and two environments: `Test server` (port 3000) and `Through mitmproxy` (port 3001). Each request has a disabled `sleep` query param; tick it in the Params tab to delay that request in the proxy.
 
 ## Mock files
 

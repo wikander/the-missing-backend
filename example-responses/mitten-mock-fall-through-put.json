@@ -1,0 +1,11 @@
+{
+  "path": "/fall-through",
+  "method": "PUT",
+  "request": {
+    "headers": { "X-Mocked-By": ["missingbe"] },
+    "body": { "altered": true }
+  },
+  "response": {
+    "headers": { "X-Mocked": ["true"] }
+  }
+}

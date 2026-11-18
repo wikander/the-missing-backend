@@ -21,6 +21,8 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `mock_dir` option for the mock directory, and the `missingbe.reload`
   command ([ADR 0002](docs/adr/0002-mock-directory-as-mitmproxy-option.md)).
 - Architecture Decision Records in `docs/adr/`.
+- Bruno collection in `bruno/` for the test server, with environments for
+  calling it directly and through mitmproxy.
 
 ### Changed
 
@@ -31,6 +33,9 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Mock headers are set on the response (or on the forwarded request when
   they are in a `request` part), with each value as its own header line
   instead of comma-joined.
+- The test server's `/test` endpoints are replaced by `/short-circuit` and
+  `/fall-through`, each with its own example mocks, and it logs every
+  request with its path, headers and body.
 
 ### Fixed
 

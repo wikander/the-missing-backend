@@ -1,0 +1,8 @@
+{
+  "path": "/short-circuit",
+  "method": "PUT",
+  "request": {
+    "statusCode": 200,
+    "body": { "message": "replaced by the mock" }
+  }
+}

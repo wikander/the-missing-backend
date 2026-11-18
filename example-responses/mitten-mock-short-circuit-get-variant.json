@@ -1,0 +1,8 @@
+{
+  "path": "/short-circuit",
+  "method": "GET",
+  "request": {
+    "statusCode": 200,
+    "body": { "message": "hello from the mock", "variant": 2 }
+  }
+}

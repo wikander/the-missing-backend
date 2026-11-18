@@ -1,0 +1,27 @@
+info:
+  name: Delete fall-through
+  type: http
+  seq: 5
+http:
+  method: DELETE
+  url: "{{baseUrl}}/fall-through"
+  params:
+    - name: sleep
+      value: "2000"
+      type: query
+      description: "missingbe: delay the request this many ms in mitmproxy; removed before forwarding"
+      disabled: true
+  auth: inherit
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+docs: |-
+  Through mitmproxy the mitten-mock-fall-through-*.json mocks alter these,
+  but they are still forwarded, so the test server logs each one with the
+  `X-Mocked-By: missingbe` header the mock added.
+
+  **Test server directly:** 204 with an empty body.
+
+  **Through mitmproxy:** Forwarded; the server's 204 is turned into a 500.

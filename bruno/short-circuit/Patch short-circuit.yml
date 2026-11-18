@@ -1,0 +1,32 @@
+info:
+  name: Patch short-circuit
+  type: http
+  seq: 4
+http:
+  method: PATCH
+  url: "{{baseUrl}}/short-circuit"
+  params:
+    - name: sleep
+      value: "2000"
+      type: query
+      description: "missingbe: delay the request this many ms in mitmproxy; removed before forwarding"
+      disabled: true
+  body:
+    type: json
+    data: |-
+      {
+        "name": "sent from Bruno"
+      }
+  auth: inherit
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+docs: |-
+  Through mitmproxy these are answered by the mitten-mock-short-circuit-*.json
+  mocks and never reach the test server, so its log stays empty.
+
+  **Test server directly:** 200 with your body merged into the dummy record.
+
+  **Through mitmproxy:** 422, the mock rejects every patch.

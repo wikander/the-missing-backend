@@ -1,0 +1,11 @@
+{
+  "path": "/fall-through",
+  "method": "PATCH",
+  "request": {
+    "headers": { "X-Mocked-By": ["missingbe"] }
+  },
+  "response": {
+    "headers": { "X-Mocked": ["true"] },
+    "body": { "message": "the server's answer was replaced by the mock" }
+  }
+}

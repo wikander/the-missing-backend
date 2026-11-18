@@ -1,0 +1,9 @@
+{
+  "path": "/short-circuit",
+  "method": "POST",
+  "request": {
+    "statusCode": 201,
+    "headers": { "Location": ["/short-circuit/42"] },
+    "body": { "message": "created by the mock", "id": 42 }
+  }
+}

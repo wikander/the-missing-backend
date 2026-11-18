@@ -1,0 +1,8 @@
+{
+  "path": "/short-circuit",
+  "method": "PATCH",
+  "request": {
+    "statusCode": 422,
+    "body": { "error": "the mock rejects every patch" }
+  }
+}

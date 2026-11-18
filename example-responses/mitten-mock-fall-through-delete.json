@@ -1,0 +1,11 @@
+{
+  "path": "/fall-through",
+  "method": "DELETE",
+  "request": {
+    "headers": { "X-Mocked-By": ["missingbe"] }
+  },
+  "response": {
+    "statusCode": 500,
+    "headers": { "X-Mocked": ["true"] }
+  }
+}
