@@ -1,0 +1,8 @@
+{
+  "path": "/short-circuit",
+  "method": "GET",
+  "request": {
+    "statusCode": 50,
+    "body": { "message": "error" }
+  }
+}

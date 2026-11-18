@@ -7,6 +7,7 @@ real backend.
 ## Layout
 
 - `missingbe.py`: the addon. Mock parsing and the request/response hooks.
+- `constants.py`: registered HTTP status codes and reason phrases.
 - `test_missingbe.py`: pytest tests.
 - `example-responses/`: example mock files.
 - `test-server.py`: Flask echo server on port 3000 for trying it out.
@@ -20,7 +21,7 @@ real backend.
 
 ```bash
 python -m pytest -q
-mitmdump -s ./missingbe.py --mode reverse:http://localhost:3000 --set mock_dir=./example-responses -p 3001
+mitmdump -s ./missingbe.py --mode reverse:http://localhost:3000 --set mock_dir=./example-responses --set connection_strategy=lazy -p 3001
 ```
 
 The mitmproxy installed by Homebrew has its own Python; tests need a

@@ -1,0 +1,7 @@
+{
+  "path": "/short-circuit",
+  "method": "GET",
+  "request": {
+    "statusCode": 200
+  }
+}

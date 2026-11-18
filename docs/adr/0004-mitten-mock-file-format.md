@@ -4,7 +4,8 @@ Date: 2026-11-17
 
 ## Status
 
-Accepted
+Accepted. `method` is made required, and HEAD handled with the GET mocks, by
+[ADR 0007](0007-required-method-and-no-forbidden-bodies.md).
 
 ## Context
 

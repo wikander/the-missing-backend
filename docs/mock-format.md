@@ -24,7 +24,7 @@ Mocks are JSON files named `mitten-mock*.json` in the directory set by the
 | Field | Required | Type | Meaning |
 |---|---|---|---|
 | `path` | **yes** | string | Path pattern to match. See [Path patterns](#path-patterns). |
-| `method` | no | string | HTTP method to match, case-insensitive. Missing: any method. |
+| `method` | **yes** | string or array of strings | HTTP method(s) to match, case-insensitive: `"GET"` or `["GET", "POST"]`. `HEAD` is not allowed; see [HEAD requests](#head-requests). |
 | `request` | no | [part](#parts) | Applied in the `request` hook. |
 | `response` | no | [part](#parts) | Applied in the `response` hook. |
 
@@ -36,14 +36,14 @@ Unknown top-level fields are ignored with a warning in the log.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `statusCode` | integer, 100–999 | See below. |
+| `statusCode` | integer or array | See [Status codes](#status-codes). |
 | `headers` | object: name → list of strings | Headers to set. See [Headers](#headers). |
 | `body` | any JSON value | Replaces the whole body. `null` counts as not set. |
 
 ## What happens to a request
 
 1. **Match.** The query string is ignored. A mock matches when its `path`
-   pattern matches and, if it has a `method`, the method matches. If several
+   pattern matches and the request's method is one of its `method`s. If several
    mocks match, one is picked at random, so several files with the same
    `path` work as variants.
 2. **`request` part.**
@@ -64,6 +64,31 @@ Requests that match no mock pass through untouched.
 | set | set | Mocked response, then adjusted by `response` |
 | not set | – | Request altered, real response |
 | not set | set | Request altered, real response adjusted |
+
+## Status codes
+
+| Value | Status |
+|---|---|
+| `404` | exactly 404. Any 100–999 is allowed, registered or not. |
+| `4` | a random registered 4xx code |
+| `50` | a random registered code from 500 to 509 |
+| `[200, 201, 204]` | one of these at random |
+| `[2, 404]` | 2xx or 404, half the time each, then a random code within the 2xx |
+
+- **Prefixes.** An integer with one or two digits is a prefix. It picks among
+  the registered codes in `constants.py` that start with it. 1xx codes are
+  never picked at random, so `1` and `10` are rejected, as is a prefix no
+  code starts with (`6`, `48`).
+- **Arrays** are sets of codes and prefixes, never ranges. An element is
+  picked first, and then a code within it, so `[200, 200, 500]` gives 200
+  two times in three. An empty array is rejected.
+- **A new pick for every request.**
+- **Reason phrase.** The reason (`Not Found`) is taken from `constants.py`,
+  with the RFC 9110 wording. Unregistered codes get an empty reason. HTTP/2
+  and HTTP/3 have no reason phrase.
+- **Bodies.** The `body` is sent whatever code is picked, including codes
+  that shouldn't have one, such as 204 and 304. Use a set without them if
+  that matters.
 
 ## Headers
 
@@ -91,6 +116,29 @@ Requests that match no mock pass through untouched.
 - If the part's headers don't set `Content-Type`, it is set to
   `application/json; charset=utf-8`.
 - A short-circuit without `body` sends an empty body and no `Content-Type`.
+- **No body where HTTP forbids one.** A 1xx, 204, 205 or 304 response is
+  sent without a body, even if the mock sets one or a `response` part adds
+  one to the server's own 304. A warning in the log names the mock file.
+  `Content-Type` and `Content-Length` are removed, except that 205 gets
+  `Content-Length: 0`, and 304 keeps both, with the length of the dropped
+  body, since a 304 describes the full response.
+
+## HEAD requests
+
+A HEAD request is a GET without the body (RFC 9110), so it is handled with
+the `GET` mocks:
+
+- It matches mocks whose `method` includes `GET`.
+- A short-circuit builds the same response as for GET, then removes the
+  body. `Content-Length` keeps the length the body would have had, and
+  `Content-Type` and the other headers stay.
+- A fall-through is forwarded to the server as HEAD. A `response.body` isn't
+  sent, but `Content-Length` is set to its length.
+- The rules for 1xx, 204, 205 and 304 apply first, as for GET.
+- Dropping the body isn't logged; for HEAD it's normal.
+
+`HEAD` itself isn't allowed in `method`, and a file that has it fails to
+load, so a HEAD request can never be answered differently from the GET.
 
 ## Path patterns
 

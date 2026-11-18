@@ -70,13 +70,15 @@ def log_request():
 
 
 def echo():
-    status, message = REPLIES[request.method]
+    # Flask answers HEAD on GET routes itself and drops the body.
+    method = "GET" if request.method == "HEAD" else request.method
+    status, message = REPLIES[method]
     if status == 204:
         return "", 204
     return jsonify(
         {
             "message": message,
-            "method": request.method,
+            "method": method,
             "path": request.path,
             "data": response_data(),
         }

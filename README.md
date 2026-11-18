@@ -2,7 +2,7 @@
 
 If you should agree on something, agree on this.
 
-to run: `mitmproxy --mode reverse:https://avtal-uppfoljning-dev.apps.tocp4.arbetsformedlingen.se -s ./missingbe.py --ssl-insecure -p 9999`
+to run: `mitmproxy --mode reverse:https://avtal-uppfoljning-dev.apps.tocp4.arbetsformedlingen.se -s ./missingbe.py --ssl-insecure --set connection_strategy=lazy -p 9999`
 
 ## Developing
 
@@ -27,6 +27,8 @@ What the missing backend does when you don't configure anything.
 
 Set them with `--set name=value` on the command line, or `:set name=value` in mitmproxy.
 
+**Always start mitmproxy with `--set connection_strategy=lazy`.** It's a mitmproxy option, not one of ours, and it is `eager` by default. In reverse mode, eager means mitmproxy connects to the backend as soon as a client connects, before the addon sees the request. If the backend is down or doesn't exist yet, every request fails with an empty reply, including requests a mock would answer. With `lazy`, mitmproxy only connects when a request is actually forwarded, so mocks work without a backend.
+
 ### Every request through the proxy
 
 1. **Delayed.** Each request waits a random 50–700 ms before anything else happens, whether a mock matches or not. `?mitten-sleep=500` (exactly 500 ms) or `?mitten-sleep=[200,800]` (random in that range) sets the delay for that request instead, and `?mitten-sleep=0` skips it. An invalid value is ignored with a warning, and the default is used.
@@ -39,12 +41,15 @@ Set them with `--set name=value` on the command line, or `:set name=value` in mi
 - **Which files load:** only files in `mock_dir` whose names start with `mitten-mock` and end in `.json`. Any other name, for example `x_mitten-mock-old.json`, is ignored, which is a way to turn a mock off.
 - **When they load:** at startup, and when `mock_dir` changes. Editing a file does nothing until you run `:missingbe.reload`.
 - **A broken file:** at startup mitmproxy stops with an error naming the file. On a reload, the error is shown and the previously loaded mocks stay active.
-- **No `method`:** the mock matches every method.
+- **`method` is required:** a method such as `"GET"`, or an array such as `["GET", "POST"]`, case-insensitive. A file without it fails to load.
+- **`HEAD` requests use the `GET` mocks.** They get exactly what a GET would get (status, headers, `Content-Length` of the body), but never the body itself. A fall-through HEAD is forwarded to the server as HEAD. `HEAD` itself isn't allowed in `method`; a file with it fails to load.
 - **No `request` part:** the request is forwarded to the server unchanged.
 - **`request` with `statusCode`:** the proxy answers itself (short-circuit). The server is never contacted.
+- **`statusCode`:** `404` is exact. `4` or `40` is a prefix: a random registered 4xx or 40x code, picked again for every request (1xx codes are never picked at random). An array such as `[200, 2, 503]` picks one element at random first. The reason phrase follows the code that was picked.
 - **`request` without `statusCode`:** its headers and body are applied, then the request is forwarded to the server.
 - **No `response` part:** the response, from the server or a short-circuit, is returned as it is.
 - **`response` part:** only the fields it sets are changed. Status, headers and body it doesn't set keep their values.
+- **Responses that can't have a body:** 1xx, 204, 205 and 304 responses are sent without a body even if the mock sets one, also when a `response` part adds a body to the server's own 304. A warning in the log names the mock file. Otherwise the client would read the leftover bytes as the start of the next response on the same connection.
 - **`body`:** replaces the whole body, sent as JSON. `Content-Type` is set to `application/json; charset=utf-8` unless the part's `headers` set it. A short-circuit without `body` sends an empty body and no `Content-Type`.
 - **`headers`:** each header replaces any existing header of the same name. A list gives one header line per value. A name or value starting with `_x_` is skipped.
 - **Unknown fields:** ignored, with a warning in the log.
@@ -67,7 +72,7 @@ The server logs every request it receives (method, path with query, headers and 
 Run the missing backend in front of the test server with the example mocks:
 
 ```
-mitmproxy --mode reverse:http://localhost:3000 -s ./missingbe.py --set mock_dir=./example-responses -p 3001
+mitmproxy --mode reverse:http://localhost:3000 -s ./missingbe.py --set mock_dir=./example-responses --set connection_strategy=lazy -p 3001
 ```
 
 The Bruno collection in `bruno/` has a request for each endpoint, and two environments: `Test server` (port 3000) and `Through mitmproxy` (port 3001). Each request has a disabled `mitten-sleep` query param; tick it in the Params tab to set that request's delay in the proxy.
@@ -77,12 +82,12 @@ The Bruno collection in `bruno/` has a request for each endpoint, and two enviro
 Mocks are loaded from the `mitten-mock*.json` files in the directory given by the `mock_dir` option (default: the directory you start mitmproxy in):
 
 ```
-mitmproxy --mode reverse:http://localhost:3000 -s ./missingbe.py --set mock_dir=./example-responses -p 3001
+mitmproxy --mode reverse:http://localhost:3000 -s ./missingbe.py --set mock_dir=./example-responses --set connection_strategy=lazy -p 3001
 ```
 
 Changing the option while running (`:set mock_dir=./other-mocks`, or the options editor with `O`) loads that directory instead. After editing mock files, reload them with the command `:missingbe.reload`.
 
-A mock matches on `path` and optionally `method`. Its `request` part either answers the request directly (when it has a `statusCode`) or alters it before it goes to the server, and its `response` part alters the response:
+A mock matches on `path` and `method`. Its `request` part either answers the request directly (when it has a `statusCode`) or alters it before it goes to the server, and its `response` part alters the response:
 
 ```json
 {

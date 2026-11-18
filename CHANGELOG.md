@@ -28,9 +28,18 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ([ADR 0005](docs/adr/0005-mitten-sleep.md)).
 - Delays can be a random range, `[min,max]` in ms, as well as a fixed
   number.
+- `statusCode` can be a 1–2 digit prefix (`4`, `40`) for a random registered
+  code, or an array of codes and prefixes to pick from, picked again for
+  every request ([ADR 0006](docs/adr/0006-random-status-codes.md)).
+- `constants.py` with the registered HTTP status codes and their reason
+  phrases.
 
 ### Changed
 
+- **Breaking:** `method` is required in mock files, as a string or an array
+  of strings. `HEAD` is not allowed in it: HEAD requests use the `GET` mocks
+  and get the GET response without the body
+  ([ADR 0007](docs/adr/0007-required-method-and-no-forbidden-bodies.md)).
 - **Breaking:** the `sleep` query parameter is renamed `mitten-sleep`, so it
   can't collide with a backend's own `sleep` parameter. `sleep` is now
   forwarded to the server like any other parameter.
@@ -40,6 +49,9 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   format. `response*.json` files are no longer loaded.
 - **Breaking:** the `missingbe.load <path>` command is replaced by the
   `mock_dir` option and `missingbe.reload`.
+- Reason phrases come from `constants.py` with the RFC 9110 wording (for
+  example `Request Timeout`, not `Request Time-out`). 444 and 499, which
+  aren't registered, now get an empty reason.
 - Mock headers are set on the response (or on the forwarded request when
   they are in a `request` part), with each value as its own header line
   instead of comma-joined.
@@ -49,6 +61,12 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Mocked 1xx, 204, 205 and 304 responses, and HEAD responses, were sent with
+  a body, which corrupted the next response on the connection. Bodies are now
+  dropped for those statuses, and HEAD requests get the GET response without
+  the body.
+- The README's commands use `--set connection_strategy=lazy`, without which
+  mitmproxy fails every request, mocked or not, when the backend is down.
 - `?sleep=` no longer blocks every other request while one is delayed
   ([ADR 0003](docs/adr/0003-non-blocking-sleep.md)).
 - The `sleep` query parameter is no longer forwarded to the server.

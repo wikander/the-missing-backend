@@ -17,7 +17,8 @@ from typing import Any, Optional
 from mitmproxy import command, ctx, exceptions, http
 from mitmproxy.addonmanager import Loader
 from mitmproxy.http import HTTPFlow
-from mitmproxy.net.http import status_codes
+
+from constants import BODYLESS_STATUS_CODES, HTTP_STATUS_PHRASES, RANDOM_STATUS_CODES
 
 JSON = None | bool | int | float | str | list["JSON"] | dict[str, "JSON"]
 
@@ -92,11 +93,25 @@ class Header:
     values: list[str]
 
 
+@dataclass(frozen=True)
+class StatusSpec:
+    """A statusCode: one or more choices, each a single code or a prefix's codes.
+
+    A choice is picked first and then a code within it, so in [2, 404] the
+    404 comes up half the time.
+    """
+
+    choices: tuple[tuple[int, ...], ...]
+
+    def pick(self, rng: random.Random) -> int:
+        return rng.choice(rng.choice(self.choices))
+
+
 @dataclass
 class MockPart:
     """The request or response part of a mock. Every field is optional."""
 
-    statusCode: Optional[int] = None
+    statusCode: Optional[StatusSpec] = None
     headers: list[Header] = field(default_factory=list)
     body: JSON = None  # None means "not set"
 
@@ -108,7 +123,7 @@ class MockPart:
 class Mock:
     path: str
     source: str
-    method: Optional[str] = None  # upper case; None matches any method
+    methods: tuple[str, ...]  # upper case, never HEAD
     request: Optional[MockPart] = None
     response: Optional[MockPart] = None
 
@@ -136,6 +151,39 @@ def parse_headers(raw: Any, where: str) -> list[Header]:
     return headers
 
 
+STATUS_FORMAT = (
+    "an integer 100-999, a 1-2 digit prefix such as 4 or 40, or an array of those"
+)
+
+
+def parse_status_choice(raw: Any, where: str) -> tuple[int, ...]:
+    """One code (404), or every registered code starting with a prefix (4, 40)."""
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise MockFileError(f"{where}.statusCode: {json.dumps(raw)} is not {STATUS_FORMAT}")
+    if 100 <= raw <= 999:
+        return (raw,)
+    if 1 <= raw <= 99:
+        prefix = str(raw)
+        codes = tuple(c for c in RANDOM_STATUS_CODES if str(c).startswith(prefix))
+        if not codes:
+            raise MockFileError(
+                f"{where}.statusCode: no status code to pick starts with {raw} "
+                "(1xx codes are never picked at random)"
+            )
+        return codes
+    raise MockFileError(f"{where}.statusCode: {raw} is not {STATUS_FORMAT}")
+
+
+def parse_status(raw: Any, where: str) -> Optional[StatusSpec]:
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        if not raw:
+            raise MockFileError(f"{where}.statusCode: an array needs at least one code")
+        return StatusSpec(tuple(parse_status_choice(r, where) for r in raw))
+    return StatusSpec((parse_status_choice(raw, where),))
+
+
 def parse_part(raw: Any, where: str) -> Optional[MockPart]:
     if raw is None:
         return None
@@ -145,17 +193,34 @@ def parse_part(raw: Any, where: str) -> Optional[MockPart]:
     for key in raw.keys() - KNOWN_PART_KEYS:
         logging.warning(f"{where}: unknown field '{key}' ignored")
 
-    status = raw.get("statusCode")
-    if status is not None and (
-        isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 999
-    ):
-        raise MockFileError(f"{where}.statusCode must be an integer between 100 and 999")
-
     return MockPart(
-        statusCode=status,
+        statusCode=parse_status(raw.get("statusCode"), where),
         headers=parse_headers(raw.get("headers"), where),
         body=raw.get("body"),
     )
+
+
+METHOD_FORMAT = 'method is required: a method such as "GET", or an array such as ["GET", "POST"]'
+
+
+def parse_methods(raw: Any) -> tuple[str, ...]:
+    """The required method field: one method or an array of them, upper-cased.
+
+    HEAD is rejected: HEAD requests use the GET mocks, so a mock can't answer
+    HEAD differently from GET.
+    """
+    if raw is None:
+        raise MockFileError(METHOD_FORMAT)
+    items = raw if isinstance(raw, list) else [raw]
+    if not items or not all(isinstance(m, str) and m.strip() for m in items):
+        raise MockFileError(METHOD_FORMAT)
+    methods = tuple(m.strip().upper() for m in items)
+    if "HEAD" in methods:
+        raise MockFileError(
+            "method HEAD isn't allowed: HEAD requests use the GET mocks, "
+            "answered without the body"
+        )
+    return methods
 
 
 def parse_mock(data: Any, source: str) -> Mock:
@@ -166,9 +231,7 @@ def parse_mock(data: Any, source: str) -> Mock:
     if not isinstance(path, str) or not path:
         raise MockFileError("path is required and must be a non-empty string")
 
-    method = data.get("method")
-    if method is not None and (not isinstance(method, str) or not method):
-        raise MockFileError("method must be a non-empty string")
+    methods = parse_methods(data.get("method"))
 
     for key in data.keys() - KNOWN_MOCK_KEYS:
         logging.warning(f"{source}: unknown field '{key}' ignored")
@@ -176,7 +239,7 @@ def parse_mock(data: Any, source: str) -> Mock:
     return Mock(
         path=path,
         source=source,
-        method=method.upper() if method else None,
+        methods=methods,
         request=parse_part(data.get("request"), "request"),
         response=parse_part(data.get("response"), "response"),
     )
@@ -224,17 +287,68 @@ def apply_part(message: http.Message, part: MockPart) -> None:
         message.text = json.dumps(part.body)
 
 
-def build_response(part: MockPart) -> http.Response:
+def set_status(response: http.Response, code: int) -> None:
+    """Set the status code and its reason phrase.
+
+    mitmproxy doesn't update the reason when status_code changes, and its
+    own table has older phrases, so the reason always comes from constants.
+    Unregistered codes get an empty reason.
+    """
+    response.status_code = code
+    response.reason = HTTP_STATUS_PHRASES.get(code, "")
+
+
+def drop_forbidden_body(response: http.Response, source: str) -> None:
+    """Remove a body the status code doesn't allow (RFC 9110).
+
+    1xx, 204, 205 and 304 responses have no content. A client doesn't read a
+    body sent with them anyway, and the leftover bytes would be taken as the
+    start of the next response on the same connection.
+    """
+    code = response.status_code
+    if not (100 <= code < 200 or code in BODYLESS_STATUS_CODES):
+        return
+    length = len(response.raw_content or b"")
+    if not length:
+        return
+    response.content = b""
+    if code == 304:
+        # A 304 describes the stored response, so Content-Length and
+        # Content-Type may stay, giving the length the full body would have.
+        response.headers["Content-Length"] = str(length)
+    else:
+        response.headers.pop("Content-Type", None)
+        if code == 205:
+            response.headers["Content-Length"] = "0"
+        else:
+            response.headers.pop("Content-Length", None)
+    logging.warning(f"{source}: a {code} response must not have a body; {length} bytes dropped")
+
+
+def drop_head_body(response: http.Response) -> None:
+    """Answer a HEAD request like the GET would be answered, minus the body.
+
+    Content-Length keeps the length the GET body would have, as RFC 9110
+    allows for HEAD; Content-Type and the other headers stay as they are.
+    """
+    length = len(response.raw_content or b"")
+    if not length:
+        return
+    response.content = b""
+    response.headers["Content-Length"] = str(length)
+
+
+def build_response(part: MockPart, rng: random.Random) -> http.Response:
     assert part.statusCode is not None
-    response = http.Response.make(part.statusCode)
+    response = http.Response.make()
+    set_status(response, part.statusCode.pick(rng))
     apply_part(response, part)
     return response
 
 
-def apply_response_part(response: http.Response, part: MockPart) -> None:
+def apply_response_part(response: http.Response, part: MockPart, rng: random.Random) -> None:
     if part.statusCode is not None:
-        response.status_code = part.statusCode
-        response.reason = status_codes.RESPONSES.get(part.statusCode, "")
+        set_status(response, part.statusCode.pick(rng))
     apply_part(response, part)
 
 
@@ -287,10 +401,12 @@ class MissingBe:
     def findMock(self, flow: HTTPFlow) -> Optional[Mock]:
         path = flow.request.path.split("?", 1)[0]
         method = flow.request.method.upper()
+        if method == "HEAD":
+            method = "GET"  # HEAD is a GET without the body (RFC 9110)
         candidates = [
             mock
             for mock in self.mocks
-            if (mock.method is None or mock.method == method)
+            if method in mock.methods
             and self.comparePaths(mock.path, path) is not None
         ]
         return random.choice(candidates) if candidates else None
@@ -371,16 +487,21 @@ class MissingBe:
         if part is None:
             return
         if part.statusCode is not None:
-            flow.response = build_response(part)  # short-circuit
+            flow.response = build_response(part, self.rng)  # short-circuit
         else:
             apply_part(flow.request, part)
 
     def response(self, flow: HTTPFlow):
         mock = self.flow_mocks.get(flow)
-        if mock is None or mock.response is None:
+        if mock is None:
             return
         assert flow.response is not None  # mitmproxy only calls this hook with a response
-        apply_response_part(flow.response, mock.response)
+        if mock.response is not None:
+            apply_response_part(flow.response, mock.response, self.rng)
+        # Also for a server's own 304 that a response part gave a body.
+        drop_forbidden_body(flow.response, mock.source)
+        if flow.request.method.upper() == "HEAD":
+            drop_head_body(flow.response)
 
 
 addons = [MissingBe()]
