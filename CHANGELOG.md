@@ -23,9 +23,19 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Architecture Decision Records in `docs/adr/`.
 - Bruno collection in `bruno/` for the test server, with environments for
   calling it directly and through mitmproxy.
+- `mitten_default_sleep` option: every request without its own delay waits
+  a random 50–700 ms by default; `0` turns it off
+  ([ADR 0005](docs/adr/0005-mitten-sleep.md)).
+- Delays can be a random range, `[min,max]` in ms, as well as a fixed
+  number.
 
 ### Changed
 
+- **Breaking:** the `sleep` query parameter is renamed `mitten-sleep`, so it
+  can't collide with a backend's own `sleep` parameter. `sleep` is now
+  forwarded to the server like any other parameter.
+- **Breaking:** requests through the proxy are delayed 50–700 ms by default.
+  Use `--set mitten_default_sleep=0` for the old behaviour.
 - **Breaking:** mock files are named `mitten-mock*.json` and use the new
   format. `response*.json` files are no longer loaded.
 - **Breaking:** the `missingbe.load <path>` command is replaced by the

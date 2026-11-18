@@ -14,6 +14,41 @@ Create an virtual environment
     python -m pip install -r requirements.txt
 ```
 
+## Default behaviour
+
+What the missing backend does when you don't configure anything.
+
+### Options
+
+| Option | Default | Meaning |
+|---|---|---|
+| `mock_dir` | `.` (the directory you start mitmproxy in) | Where `mitten-mock*.json` files are loaded from. |
+| `mitten_default_sleep` | `[50,700]` | Delay in ms for requests without `?mitten-sleep=`. `0` turns it off. |
+
+Set them with `--set name=value` on the command line, or `:set name=value` in mitmproxy.
+
+### Every request through the proxy
+
+1. **Delayed.** Each request waits a random 50–700 ms before anything else happens, whether a mock matches or not. `?mitten-sleep=500` (exactly 500 ms) or `?mitten-sleep=[200,800]` (random in that range) sets the delay for that request instead, and `?mitten-sleep=0` skips it. An invalid value is ignored with a warning, and the default is used.
+2. **`mitten-sleep` removed.** The parameter never reaches the server. All other query parameters, including a plain `sleep`, are forwarded.
+3. **Matched against the mocks.** The query string is ignored when matching. If several mocks match, one is picked at random for each request.
+4. **No match: passed through untouched.** The request goes to the server, and the server's response comes back unchanged.
+
+### Mock files
+
+- **Which files load:** only files in `mock_dir` whose names start with `mitten-mock` and end in `.json`. Any other name, for example `x_mitten-mock-old.json`, is ignored, which is a way to turn a mock off.
+- **When they load:** at startup, and when `mock_dir` changes. Editing a file does nothing until you run `:missingbe.reload`.
+- **A broken file:** at startup mitmproxy stops with an error naming the file. On a reload, the error is shown and the previously loaded mocks stay active.
+- **No `method`:** the mock matches every method.
+- **No `request` part:** the request is forwarded to the server unchanged.
+- **`request` with `statusCode`:** the proxy answers itself (short-circuit). The server is never contacted.
+- **`request` without `statusCode`:** its headers and body are applied, then the request is forwarded to the server.
+- **No `response` part:** the response, from the server or a short-circuit, is returned as it is.
+- **`response` part:** only the fields it sets are changed. Status, headers and body it doesn't set keep their values.
+- **`body`:** replaces the whole body, sent as JSON. `Content-Type` is set to `application/json; charset=utf-8` unless the part's `headers` set it. A short-circuit without `body` sends an empty body and no `Content-Type`.
+- **`headers`:** each header replaces any existing header of the same name. A list gives one header line per value. A name or value starting with `_x_` is skipped.
+- **Unknown fields:** ignored, with a warning in the log.
+
 ## Learn and test
 
 Use the test server
@@ -35,7 +70,7 @@ Run the missing backend in front of the test server with the example mocks:
 mitmproxy --mode reverse:http://localhost:3000 -s ./missingbe.py --set mock_dir=./example-responses -p 3001
 ```
 
-The Bruno collection in `bruno/` has a request for each endpoint, and two environments: `Test server` (port 3000) and `Through mitmproxy` (port 3001). Each request has a disabled `sleep` query param; tick it in the Params tab to delay that request in the proxy.
+The Bruno collection in `bruno/` has a request for each endpoint, and two environments: `Test server` (port 3000) and `Through mitmproxy` (port 3001). Each request has a disabled `mitten-sleep` query param; tick it in the Params tab to set that request's delay in the proxy.
 
 ## Mock files
 
@@ -58,7 +93,7 @@ A mock matches on `path` and optionally `method`. Its `request` part either answ
 }
 ```
 
-The full reference is in [docs/mock-format.md](docs/mock-format.md). Add `?sleep=<ms>` to any request to delay it.
+The full reference is in [docs/mock-format.md](docs/mock-format.md). What happens when a part or field is left out is listed under [Default behaviour](#default-behaviour).
 
 ## Project docs
 

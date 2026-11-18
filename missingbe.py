@@ -30,9 +30,60 @@ JSON_CONTENT_TYPE = "application/json; charset=utf-8"
 KNOWN_MOCK_KEYS = {"path", "method", "request", "response"}
 KNOWN_PART_KEYS = {"statusCode", "headers", "body"}
 
+# Prefixed so it can't collide with a query parameter the real backend uses.
+SLEEP_PARAM = "mitten-sleep"
+DEFAULT_SLEEP_OPTION = "mitten_default_sleep"
+DEFAULT_SLEEP = "[50,700]"
+
 
 class MockFileError(ValueError):
     """A mock file that can't be loaded."""
+
+
+class SleepError(ValueError):
+    """A sleep value that isn't an integer or a [min, max] pair."""
+
+
+@dataclass(frozen=True)
+class Sleep:
+    """A delay in milliseconds: fixed when min_ms == max_ms, else random."""
+
+    min_ms: int
+    max_ms: int
+
+    def pick(self, rng: random.Random) -> int:
+        return rng.randint(self.min_ms, self.max_ms)
+
+
+NO_SLEEP = Sleep(0, 0)
+
+
+def _is_ms(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def parse_sleep(raw: Any) -> Sleep:
+    """Parse a decoded JSON sleep value: 500 or [200, 800], in milliseconds."""
+    if _is_ms(raw):
+        return Sleep(raw, raw)
+    if isinstance(raw, list) and len(raw) == 2 and all(_is_ms(v) for v in raw):
+        if raw[0] > raw[1]:
+            raise SleepError(f"{raw}: min is greater than max")
+        return Sleep(raw[0], raw[1])
+    raise SleepError(
+        f"{json.dumps(raw)}: expected milliseconds as a non-negative integer or [min, max]"
+    )
+
+
+def parse_sleep_text(text: str) -> Sleep:
+    """Parse a sleep value given as text, such as a query parameter or option."""
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        raise SleepError(
+            f"{text!r}: expected milliseconds as a non-negative integer or [min, max]"
+        ) from None
+    return parse_sleep(raw)
 
 
 @dataclass
@@ -198,6 +249,10 @@ class MissingBe:
         self.flow_mocks: weakref.WeakKeyDictionary[HTTPFlow, Mock] = (
             weakref.WeakKeyDictionary()
         )
+        # No delay until configure() reads the option, so tests that build the
+        # addon directly don't wait.
+        self.default_sleep: Sleep = NO_SLEEP
+        self.rng = random.Random()
 
     def comparePaths(self, abstractPath: str, path: str):
         abstractPathParts = [p for p in abstractPath.split("/") if p]
@@ -218,14 +273,6 @@ class MissingBe:
                 return None
 
         return params
-
-    def parseStringAsNumber(self, s: str | None):
-        if s is None:
-            return None
-        try:
-            return int(s)
-        except ValueError:
-            return None
 
     def getAbsolutePath(self, path_str: str):
         return str((Path.cwd() / Path(path_str)).resolve())
@@ -255,8 +302,24 @@ class MissingBe:
             default=".",
             help="Directory to load mitten-mock*.json files from, relative to the current directory.",
         )
+        loader.add_option(
+            name=DEFAULT_SLEEP_OPTION,
+            typespec=str,
+            default=DEFAULT_SLEEP,
+            help=(
+                f"Delay in ms for requests without ?{SLEEP_PARAM}=: an integer, "
+                "or [min,max] for a random delay. 0 turns it off."
+            ),
+        )
 
     def configure(self, updated: set[str]):
+        if DEFAULT_SLEEP_OPTION in updated:
+            text = getattr(ctx.options, DEFAULT_SLEEP_OPTION)
+            try:
+                self.default_sleep = parse_sleep_text(text)
+            except SleepError as e:
+                raise exceptions.OptionsError(f"{DEFAULT_SLEEP_OPTION}: {e}") from e
+
         if "mock_dir" in updated:
             directory = ctx.options.mock_dir
             if not os.path.isdir(self.getAbsolutePath(directory)):
@@ -274,14 +337,27 @@ class MissingBe:
         except MockFileError as e:
             raise exceptions.CommandError(f"Reload failed, keeping previous mocks: {e}") from e
 
+    def requestSleep(self, flow: HTTPFlow) -> Sleep:
+        """The ?mitten-sleep= value, removed from the request, or the default."""
+        # Only touch the query when the param is there: changing it re-encodes
+        # the whole query string (?flag becomes ?flag=).
+        if SLEEP_PARAM not in flow.request.query:
+            return self.default_sleep
+        # pop: the param is for the proxy only, so it must not reach the server.
+        text = flow.request.query.pop(SLEEP_PARAM)
+        try:
+            return parse_sleep_text(text)
+        except SleepError as e:
+            logging.warning(f"{SLEEP_PARAM} ignored, using {DEFAULT_SLEEP_OPTION}: {e}")
+            return self.default_sleep
+
     async def request(self, flow: HTTPFlow):
-        # pop: the sleep param is for the proxy only, so remove it before the
-        # request can be forwarded to the real server.
-        sleep = self.parseStringAsNumber(flow.request.query.pop("sleep", None))
-        if sleep:
+        sleep_ms = self.requestSleep(flow).pick(self.rng)
+        if sleep_ms:
+            flow.metadata[METADATA_KEY] = {"sleep_ms": sleep_ms}
             # asyncio.sleep only pauses this flow; time.sleep would block
             # mitmproxy's event loop and stall every other request too.
-            await asyncio.sleep(sleep / 1000)
+            await asyncio.sleep(sleep_ms / 1000)
 
         mock = self.findMock(flow)
         if mock is None:
@@ -289,7 +365,7 @@ class MissingBe:
 
         logging.info(f"{flow.request.method} {flow.request.path} matched {mock.source}")
         self.flow_mocks[flow] = mock
-        flow.metadata[METADATA_KEY] = {"mock": mock.source}
+        flow.metadata.setdefault(METADATA_KEY, {})["mock"] = mock.source
 
         part = mock.request
         if part is None:

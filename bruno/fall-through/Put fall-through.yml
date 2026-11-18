@@ -6,10 +6,10 @@ http:
   method: PUT
   url: "{{baseUrl}}/fall-through"
   params:
-    - name: sleep
-      value: "2000"
+    - name: mitten-sleep
+      value: "[200,800]"
       type: query
-      description: "missingbe: delay the request this many ms in mitmproxy; removed before forwarding"
+      description: "missingbe: delay in ms, 500 or [min,max]; replaces mitten_default_sleep, removed before forwarding"
       disabled: true
   body:
     type: json

@@ -4,7 +4,8 @@ Date: 2026-11-17
 
 ## Status
 
-Accepted
+Accepted. The parameter is renamed and given a default by
+[ADR 0005](0005-mitten-sleep.md).
 
 ## Context
 

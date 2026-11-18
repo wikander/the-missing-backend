@@ -100,11 +100,30 @@ Requests that match no mock pass through untouched.
 | `/api/people/:id` | `/api/people/1` | `/api/people/1/films` |
 | `/api/:*` | `/api/people`, `/api/people/1/films` | `/other` |
 
-## The `sleep` query parameter
+## Delays: `?mitten-sleep=` and `mitten_default_sleep`
 
-`?sleep=<milliseconds>` on any request delays it by that long, without
-holding up other requests. The parameter is removed before the request is
-forwarded. It works with or without a matching mock.
+Every request through the proxy is delayed before it is matched, without
+holding up other requests. The delay is in milliseconds and written as JSON:
+
+| Value | Delay |
+|---|---|
+| `500` | exactly 500 ms |
+| `[200,800]` | a random whole number from 200 to 800 ms, both included |
+| `0` | none |
+
+- **`?mitten-sleep=<value>`** on a request sets its delay. The parameter is
+  removed before the request is forwarded, so the server never sees it. In a
+  URL the brackets may be percent-encoded (`%5B200,800%5D`); with curl, use
+  `-g` or encode them.
+- **`mitten_default_sleep`** is the mitmproxy option used for requests
+  without the parameter. It is `[50,700]` unless set:
+  `--set mitten_default_sleep=0` turns it off,
+  `--set mitten_default_sleep=[100,300]` changes it. An invalid value is an
+  option error.
+- An invalid `mitten-sleep` value is ignored with a warning in the log, and
+  the default is used.
+- The delay applies to every request, matched by a mock or not. The chosen
+  delay is stored in the flow's metadata as `missingbe.sleep_ms`.
 
 ## Validation
 
