@@ -103,7 +103,7 @@ def test_single_string_header_value_is_accepted():
     assert mock.response.headers[0].values == ["text/plain"]
 
 def test_non_string_header_values_are_rejected():
-    with pytest.raises(MockFileError, match="headers.X"):
+    with pytest.raises(MockFileError, match="headers.X must be a string or a list of strings"):
         parse_mock({"path": "/t", "method": "GET", "request": {"headers": {"X": [1]}}}, "f.json")
 
 
@@ -120,6 +120,26 @@ def test_load_error_names_the_file(tmp_path):
     (tmp_path / "mitten-mock-bad.json").write_text("{not json")
     with pytest.raises(MockFileError, match="mitten-mock-bad.json"):
         load_mock_files(str(tmp_path))
+
+def test_non_utf8_file_is_a_mock_file_error(tmp_path):
+    (tmp_path / "mitten-mock-latin1.json").write_bytes('{"path": "/s\xf6ka", "method": "GET"}'.encode("latin-1"))
+    with pytest.raises(MockFileError, match="mitten-mock-latin1.json: not UTF-8"):
+        load_mock_files(str(tmp_path))
+
+def test_missing_directory_is_a_mock_file_error(tmp_path):
+    with pytest.raises(MockFileError, match="gone"):
+        load_mock_files(str(tmp_path / "gone"))
+
+def test_unreadable_file_is_a_mock_file_error(tmp_path):
+    (tmp_path / "mitten-mock-dir.json").mkdir()  # not a file: skipped
+    target = tmp_path / "mitten-mock-locked.json"
+    target.write_text('{"path": "/a", "method": "GET"}')
+    target.chmod(0)
+    try:
+        with pytest.raises(MockFileError, match="mitten-mock-locked.json"):
+            load_mock_files(str(tmp_path))
+    finally:
+        target.chmod(0o644)
 
 def test_failed_load_keeps_previous_mocks(sut, tmp_path):
     (tmp_path / "mitten-mock-a.json").write_text('{"path": "/a", "method": "GET"}')

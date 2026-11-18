@@ -96,7 +96,7 @@ def parse_headers(raw: Any, where: str) -> list[Header]:
         if isinstance(values, str):
             values = [values]
         if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
-            raise MockFileError(f"{where}.headers.{key} must be a list of strings")
+            raise MockFileError(f"{where}.headers.{key} must be a string or a list of strings")
         kept = [v for v in values if not v.startswith(DISABLED_PREFIX)]
         if kept:
             headers.append(Header(key=key, values=kept))
@@ -201,14 +201,23 @@ def load_mock_files(directory: str) -> list[Mock]:
     Raises MockFileError naming the file if any of them is invalid, so a
     caller can keep its previous mocks.
     """
+    try:
+        entries = sorted(os.scandir(directory), key=lambda e: e.name)
+    except OSError as e:
+        raise MockFileError(f"{directory}: {e.strerror}") from e
+
     mocks = []
-    for entry in sorted(os.scandir(directory), key=lambda e: e.name):
+    for entry in entries:
         if not (entry.is_file() and is_mock_file(entry.name)):
             continue
         try:
             with open(entry.path, "r", encoding="utf-8") as file:
                 data = json.load(file)
             mocks.append(parse_mock(data, entry.name))
+        except OSError as e:
+            raise MockFileError(f"{entry.name}: {e.strerror}") from e
+        except UnicodeDecodeError as e:
+            raise MockFileError(f"{entry.name}: not UTF-8 ({e.reason} at byte {e.start})") from e
         except (json.JSONDecodeError, MockFileError) as e:
             raise MockFileError(f"{entry.name}: {e}") from e
         logging.info(f"Mock file loaded: {entry.name}")

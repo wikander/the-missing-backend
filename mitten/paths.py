@@ -7,14 +7,21 @@ what a segment is.
 
 from dataclasses import dataclass
 from functools import cached_property
+from urllib.parse import unquote
 
 # The specificity of each kind of segment: higher is more specific.
 LITERAL_SEGMENT, PARAM_SEGMENT, PATTERN_END, WILDCARD_SEGMENT = 3, 2, 1, 0
 
 
 def _segments(path: str) -> list[str]:
-    """Path segments, ignoring empty ones, so trailing slashes don't matter."""
-    return [p for p in path.split("/") if p]
+    """Decoded path segments, ignoring empty ones, so trailing slashes don't
+    matter.
+
+    Splitting comes before decoding, so an encoded slash (%2F) stays inside
+    its segment. Decoding lets /users/a%20b match a pattern written either
+    as /users/a b or /users/a%20b.
+    """
+    return [unquote(p) for p in path.split("/") if p]
 
 
 def _is_wildcard(segment: str) -> bool:

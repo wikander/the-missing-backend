@@ -167,7 +167,7 @@ class MissingBe:
         if not candidates:
             return None
         best = max(mock.path.specificity for mock in candidates)
-        return random.choice([m for m in candidates if m.path.specificity == best])
+        return self.rng.choice([m for m in candidates if m.path.specificity == best])
 
     def answers_preflight(self, request: http.Request) -> bool:
         """Whether mitten_cors has the addon answer this preflight itself.

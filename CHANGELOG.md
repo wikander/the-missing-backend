@@ -75,6 +75,17 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Percent-encoded request paths are decoded before matching, so a mock for
+  `/söka` or `/users/a b` matches `/s%C3%B6ka` and `/users/a%20b`.
+- Mocked 1xx and 204 responses without a body were sent with
+  `Content-Length: 0`, which those statuses must not have.
+- A mock file that isn't UTF-8 or can't be read, or a `mock_dir` that has
+  disappeared before `missingbe.reload`, gave a traceback instead of an
+  error naming the file; a failed reload now keeps the previous mocks.
+- Variants are picked with the addon's own random generator, like the
+  other random choices, so tests can make the picks repeatable.
+- `pyproject.toml` requires Python 3.12, which mitmproxy 12 and the code
+  need, instead of 3.9.
 - A `:*` pattern matched paths shorter than the part before it: `/a/b/:*`
   matched `/a`. The segments before `:*` are now required.
 - Mocked 1xx, 204, 205 and 304 responses, and HEAD responses, were sent with

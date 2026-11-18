@@ -15,6 +15,10 @@ from mitten.paths import PathPattern
         ("/a/:*", "/a"),  # :* matches zero segments
         ("/a/b/:*", "/a/b"),
         ("/a/:*/ignored", "/a/b/c"),  # anything after :* is ignored
+        ("/users/a b", "/users/a%20b"),  # the request path is decoded
+        ("/users/a%20b", "/users/a%20b"),  # and so is the pattern
+        ("/s\u00f6ka", "/s%C3%B6ka"),
+        ("/files/:name", "/files/a%2Fb"),  # an encoded slash stays in its segment
     ],
 )
 def test_matches(pattern, path):
@@ -30,6 +34,7 @@ def test_matches(pattern, path):
         ("/users/:*/extra", "/other/thing"),
         ("/a/b/:*", "/a"),  # the segments before :* are required
         ("/a/b/:*", "/a/c"),
+        ("/files/a/b", "/files/a%2Fb"),
     ],
 )
 def test_does_not_match(pattern, path):

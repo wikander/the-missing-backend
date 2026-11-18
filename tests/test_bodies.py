@@ -46,10 +46,17 @@ def test_body_dropped_on_real_304_from_response_part(sut):
     assert flow.response.content == b""
 
 
-def test_bodyless_status_without_body_is_untouched(sut):
-    response = short_circuit(sut, 204)
+@pytest.mark.parametrize("status", [204, 101])
+def test_no_content_length_on_1xx_and_204_without_body(sut, status, caplog):
+    response = short_circuit(sut, status)  # mitmproxy makes it with Content-Length: 0
     assert response.content == b""
-    assert "Content-Length" in response.headers  # as mitmproxy made it
+    assert "Content-Length" not in response.headers
+    assert "must not have a body" not in caplog.text
+
+
+def test_205_and_304_without_body_keep_content_length(sut):
+    assert short_circuit(sut, 205).headers["Content-Length"] == "0"
+    assert "Content-Length" in short_circuit(sut, 304).headers
 
 
 def test_body_kept_for_other_statuses(sut):

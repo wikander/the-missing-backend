@@ -1,3 +1,5 @@
+import random
+
 import pytest
 
 from tests.helpers import make_flow, with_mocks
@@ -53,3 +55,13 @@ def test_differently_named_params_are_variants(sut):
 def test_less_specific_mock_used_for_other_methods(sut):
     with_mocks(sut, {"path": "/users/me", "method": "POST"}, {"path": "/users/:id", "method": "GET"})
     assert sut.find_mock(make_flow(path="/users/me")).path.text == "/users/:id"
+
+def test_variants_are_picked_with_the_addons_rng(sut):
+    with_mocks(sut, {"path": "/test", "method": "GET"}, {"path": "/test", "method": "GET"})
+
+    def picks(seed):
+        sut.rng = random.Random(seed)
+        return [sut.find_mock(make_flow()).source for _ in range(20)]
+
+    assert picks(7) == picks(7)
+    assert len(set(picks(7))) == 2

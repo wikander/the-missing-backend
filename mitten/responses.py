@@ -69,6 +69,10 @@ def drop_forbidden_body(response: http.Response, source: str) -> None:
     if not (100 <= code < 200 or code in BODYLESS_STATUS_CODES):
         return
     length = _body_length(response)
+    if code not in (205, 304):
+        # A 1xx or 204 must not have Content-Length at all, not even the
+        # "0" mitmproxy gives every response it makes.
+        response.headers.pop("Content-Length", None)
     if not length:
         return
     response.content = b""

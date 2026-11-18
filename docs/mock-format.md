@@ -152,7 +152,10 @@ load, so a HEAD request can never be answered differently from the GET.
 
 `:name` matches exactly one segment. `:*` matches the rest of the path, from
 zero segments up, and anything after it in the pattern is ignored. Trailing
-slashes and the query string don't matter.
+slashes and the query string don't matter. Percent-encoding is decoded in
+both the request path and the pattern, so `/users/a b` and `/users/a%20b`
+both match a request for `/users/a%20b`, and `/söka` matches `/s%C3%B6ka`.
+An encoded slash, `%2F`, stays part of its segment.
 
 When several patterns match, they are compared segment by segment from the
 left. At the first segment where they differ, a literal beats a `:param`,
