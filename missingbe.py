@@ -407,6 +407,30 @@ def apply_response_part(response: http.Response, part: MockPart, rng: random.Ran
     apply_part(response, part)
 
 
+# ---- Path specificity ----------------------------------------------------------
+
+LITERAL_SEGMENT, PARAM_SEGMENT, PATTERN_END, WILDCARD_SEGMENT = 3, 2, 1, 0
+
+
+def path_specificity(pattern: str) -> tuple[int, ...]:
+    """A sort key: higher is more specific.
+
+    Segments are compared left to right, and at the first that differs a
+    literal beats a :param, which beats :*. Segments after :* are never
+    compared, so the key stops there. A pattern without :* ends with
+    PATTERN_END, so /a beats /a/:* for the path /a: two patterns matching
+    the same path can only differ there by one ending where the other has :*.
+    """
+    key = []
+    for part in (p for p in pattern.split("/") if p):
+        if part.startswith(":*"):
+            key.append(WILDCARD_SEGMENT)
+            return tuple(key)
+        key.append(PARAM_SEGMENT if part.startswith(":") else LITERAL_SEGMENT)
+    key.append(PATTERN_END)
+    return tuple(key)
+
+
 # ---- Addon -------------------------------------------------------------------
 
 
@@ -428,9 +452,13 @@ class MissingBe:
         abstractPathParts = [p for p in abstractPath.split("/") if p]
         pathParts = [p for p in path.split("/") if p]
 
-        has_wildcard = any(p.startswith(":*") for p in abstractPathParts)
+        wildcard = next((i for i, p in enumerate(abstractPathParts) if p.startswith(":*")), None)
 
-        if not has_wildcard and len(abstractPathParts) != len(pathParts):
+        if wildcard is None:
+            if len(abstractPathParts) != len(pathParts):
+                return None
+        elif len(pathParts) < wildcard:
+            # Every segment before :* must be there; :* may match none.
             return None
 
         params = {}
@@ -466,8 +494,13 @@ class MissingBe:
         ]
 
     def findMock(self, flow: HTTPFlow) -> Optional[Mock]:
+        """The most specific matching mock (see path_specificity). Mocks with
+        equally specific patterns are variants, picked at random."""
         candidates = self.matchingMocks(flow.request.path, flow.request.method)
-        return random.choice(candidates) if candidates else None
+        if not candidates:
+            return None
+        best = max(path_specificity(mock.path) for mock in candidates)
+        return random.choice([m for m in candidates if path_specificity(m.path) == best])
 
     def answersPreflight(self, request: http.Request) -> bool:
         """Whether mitten_cors has the addon answer this preflight itself.

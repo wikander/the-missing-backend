@@ -78,6 +78,14 @@ def test_no_match_with_wildcard(sut):
 def test_no_match_different_structure(sut):
     assert sut.comparePaths("/api/people/1", "/test") is None
 
+def test_wildcard_requires_the_segments_before_it(sut):
+    assert sut.comparePaths("/a/b/:*", "/a") is None
+    assert sut.comparePaths("/a/b/:*", "/a/c") is None
+
+def test_wildcard_matches_zero_segments(sut):
+    assert sut.comparePaths("/a/:*", "/a") == {}
+    assert sut.comparePaths("/a/b/:*", "/a/b") == {}
+
 
 # ---- Parsing -------------------------------------------------------------------
 
@@ -224,6 +232,37 @@ def test_head_uses_get_mocks(sut):
 def test_query_string_is_ignored_when_matching(sut):
     with_mocks(sut, {"path": "/test", "method": "GET"})
     assert sut.findMock(make_flow(path="/test?a=1")) is not None
+
+
+def best_match(sut, path, *patterns):
+    with_mocks(sut, *({"path": p, "method": "GET"} for p in patterns))
+    picks = {sut.findMock(make_flow(path=path)).path for _ in range(50)}
+    return picks.pop() if len(picks) == 1 else picks
+
+@pytest.mark.parametrize("path, patterns, winner", [
+    ("/users/me", ["/users/:id", "/users/me"], "/users/me"),
+    ("/users/1/orders", ["/users/:*", "/users/:id/orders"], "/users/:id/orders"),
+    ("/users/1", ["/:*", "/users/:*"], "/users/:*"),
+    ("/a/b/c", ["/:y/b/c", "/a/:x/c"], "/a/:x/c"),
+    ("/a", ["/a/:*", "/a"], "/a"),
+    ("/a/b", ["/a/:*", "/a/b/:*"], "/a/b/:*"),
+    ("/a/b", ["/a/:*", "/a/:id"], "/a/:id"),
+])
+def test_most_specific_pattern_wins(sut, path, patterns, winner):
+    assert best_match(sut, path, *patterns) == winner
+
+def test_equally_specific_patterns_are_variants(sut):
+    with_mocks(sut, {"path": "/a/:id", "method": "GET"}, {"path": "/a/:id", "method": "GET"},
+               {"path": "/:*", "method": "GET"})
+    picks = {sut.findMock(make_flow(path="/a/1")).source for _ in range(100)}
+    assert picks == {"mitten-mock-0.json", "mitten-mock-1.json"}
+
+def test_differently_named_params_are_variants(sut):
+    assert best_match(sut, "/a/1", "/a/:id", "/a/:name") == {"/a/:id", "/a/:name"}
+
+def test_less_specific_mock_used_for_other_methods(sut):
+    with_mocks(sut, {"path": "/users/me", "method": "POST"}, {"path": "/users/:id", "method": "GET"})
+    assert sut.findMock(make_flow(path="/users/me")).path == "/users/:id"
 
 
 # ---- Request hook ----------------------------------------------------------------

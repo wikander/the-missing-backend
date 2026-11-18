@@ -54,6 +54,10 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   format. `response*.json` files are no longer loaded.
 - **Breaking:** the `missingbe.load <path>` command is replaced by the
   `mock_dir` option and `missingbe.reload`.
+- When several mocks match a request, the one with the most specific `path`
+  wins, instead of a random one: `/users/me` beats `/users/:id`, which beats
+  `/users/:*`. Mocks with equally specific paths are still picked at random
+  ([ADR 0009](docs/adr/0009-most-specific-path-wins.md)).
 - Reason phrases come from `constants.py` with the RFC 9110 wording (for
   example `Request Timeout`, not `Request Time-out`). 444 and 499, which
   aren't registered, now get an empty reason.
@@ -66,6 +70,8 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A `:*` pattern matched paths shorter than the part before it: `/a/b/:*`
+  matched `/a`. The segments before `:*` are now required.
 - Mocked 1xx, 204, 205 and 304 responses, and HEAD responses, were sent with
   a body, which corrupted the next response on the connection. Bodies are now
   dropped for those statuses, and HEAD requests get the GET response without

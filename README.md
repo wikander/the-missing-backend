@@ -58,6 +58,7 @@ A browser only lets a page read a response from another origin (scheme, host and
 - **Which files load:** only files in `mock_dir` whose names start with `mitten-mock` and end in `.json`. Any other name, for example `x_mitten-mock-old.json`, is ignored, which is a way to turn a mock off.
 - **When they load:** at startup, and when `mock_dir` changes. Editing a file does nothing until you run `:missingbe.reload`.
 - **A broken file:** at startup mitmproxy stops with an error naming the file. On a reload, the error is shown and the previously loaded mocks stay active.
+- **Several matching mocks:** the one with the most specific `path` wins: at the first segment where the patterns differ, a literal beats `:param`, which beats `:*`. Mocks with equally specific paths are variants, picked at random for every request. See [Path patterns](docs/mock-format.md#path-patterns).
 - **`method` is required:** a method such as `"GET"`, or an array such as `["GET", "POST"]`, case-insensitive. A file without it fails to load.
 - **`HEAD` requests use the `GET` mocks.** They get exactly what a GET would get (status, headers, `Content-Length` of the body), but never the body itself. A fall-through HEAD is forwarded to the server as HEAD. `HEAD` itself isn't allowed in `method`; a file with it fails to load.
 - **No `request` part:** the request is forwarded to the server unchanged.

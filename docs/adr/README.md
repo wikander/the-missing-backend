@@ -13,3 +13,4 @@ Why the project is built the way it is. See
 | [0006](0006-random-status-codes.md) | Status code prefixes and sets | Accepted |
 | [0007](0007-required-method-and-no-forbidden-bodies.md) | Required `method`, HEAD as GET, no forbidden bodies | Accepted |
 | [0008](0008-cors-for-mocks.md) | CORS for mocked responses | Accepted |
+| [0009](0009-most-specific-path-wins.md) | The most specific path wins | Accepted |

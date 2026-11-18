@@ -44,8 +44,9 @@ Unknown top-level fields are ignored with a warning in the log.
 
 1. **Match.** The query string is ignored. A mock matches when its `path`
    pattern matches and the request's method is one of its `method`s. If several
-   mocks match, one is picked at random, so several files with the same
-   `path` work as variants.
+   mocks match, the one with the most specific `path` wins (see
+   [Path patterns](#path-patterns)). Mocks with equally specific paths are
+   variants: one is picked at random for every request.
 2. **`request` part.**
    - **With `statusCode`: short-circuit.** A response is built from this
      part's `statusCode`, `headers` and `body`. The server is not contacted.
@@ -146,7 +147,28 @@ load, so a HEAD request can never be answered differently from the GET.
 |---|---|---|
 | `/api/people` | `/api/people` | `/api/people/1` |
 | `/api/people/:id` | `/api/people/1` | `/api/people/1/films` |
-| `/api/:*` | `/api/people`, `/api/people/1/films` | `/other` |
+| `/api/:*` | `/api`, `/api/people`, `/api/people/1/films` | `/other` |
+| `/api/people/:*` | `/api/people`, `/api/people/1` | `/api` |
+
+`:name` matches exactly one segment. `:*` matches the rest of the path, from
+zero segments up, and anything after it in the pattern is ignored. Trailing
+slashes and the query string don't matter.
+
+When several patterns match, they are compared segment by segment from the
+left. At the first segment where they differ, a literal beats a `:param`,
+which beats `:*`, and a pattern that ends there beats one with `:*`:
+
+| Request | Patterns | Winner |
+|---|---|---|
+| `/users/me` | `/users/me`, `/users/:id` | `/users/me` |
+| `/users/1/orders` | `/users/:id/orders`, `/users/:*` | `/users/:id/orders` |
+| `/a/b/c` | `/a/:x/c`, `/:y/b/c` | `/a/:x/c` |
+| `/api` | `/api`, `/api/:*` | `/api` |
+
+Only the kind of each segment counts, so `/users/:id` and `/users/:name` are
+equally specific, and are variants of each other. Mocks for other methods
+don't take part: a `POST /users/me` mock doesn't stop `GET /users/me` from
+using a `GET /users/:id` mock.
 
 ## Delays: `?mitten-sleep=` and `mitten_default_sleep`
 
